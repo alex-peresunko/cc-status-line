@@ -9,16 +9,29 @@ STATUS_LINE = {
     "command": "bash ~/.claude/statusline-command.sh",
 }
 
-# Exact hook command stored in settings.json
-HOOK_CMD = (
-    'input=$(cat); '
-    'sid=$(echo "$input" | jq -r \'.session_id // ""\'); '
-    'prompt=$(echo "$input" | jq -r \'.prompt // ""\'); '
-    '[ "$prompt" = "/clear" ] && [ -n "$sid" ] && rm -f "/tmp/claude-out-tokens-${sid}" || true'
-)
-
-HOOK_ENTRY = {"type": "command", "command": HOOK_CMD}
-HOOK_WRAPPER = {"hooks": [HOOK_ENTRY]}
+# Each hook is (event_name, command_string)
+HOOKS = [
+    (
+        "UserPromptSubmit",
+        'input=$(cat); '
+        'sid=$(echo "$input" | jq -r \'.session_id // ""\'); '
+        'prompt=$(echo "$input" | jq -r \'.prompt // ""\'); '
+        '[ "$prompt" = "/clear" ] && [ -n "$sid" ] && rm -f "/tmp/claude-out-tokens-${sid}" || true',
+    ),
+    (
+        "PreToolUse",
+        'input=$(cat); '
+        'sid=$(echo "$input" | jq -r \'.session_id // ""\'); '
+        'tool=$(echo "$input" | jq -r \'.tool_name // ""\'); '
+        '[ -n "$sid" ] && [ -n "$tool" ] && printf "%s" "$tool" > "/tmp/claude-tool-${sid}" || true',
+    ),
+    (
+        "PostToolUse",
+        'input=$(cat); '
+        'sid=$(echo "$input" | jq -r \'.session_id // ""\'); '
+        '[ -n "$sid" ] && rm -f "/tmp/claude-tool-${sid}" || true',
+    ),
+]
 
 
 def load():
@@ -29,21 +42,23 @@ def save(data):
     SETTINGS.write_text(json.dumps(data, indent=2) + "\n")
 
 
+def _existing_cmds(data, event):
+    return {
+        h.get("command")
+        for w in data.get("hooks", {}).get(event, [])
+        for h in w.get("hooks", [])
+    }
+
+
 def install():
     data = load()
     data["statusLine"] = STATUS_LINE
+    data.setdefault("hooks", {})
 
-    # Ensure hooks.UserPromptSubmit exists
-    data.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
-
-    # Idempotent: only add the hook wrapper if the command isn't already present
-    existing_cmds = [
-        h.get("command")
-        for w in data["hooks"]["UserPromptSubmit"]
-        for h in w.get("hooks", [])
-    ]
-    if HOOK_CMD not in existing_cmds:
-        data["hooks"]["UserPromptSubmit"].append(HOOK_WRAPPER)
+    for event, cmd in HOOKS:
+        data["hooks"].setdefault(event, [])
+        if cmd not in _existing_cmds(data, event):
+            data["hooks"][event].append({"hooks": [{"type": "command", "command": cmd}]})
 
     save(data)
     print("settings.json patched (install).")
@@ -53,15 +68,15 @@ def uninstall():
     data = load()
     data.pop("statusLine", None)
 
-    # Remove our hook wrapper (any wrapper whose sole hook matches our command)
-    ups = data.get("hooks", {}).get("UserPromptSubmit", [])
-    data["hooks"]["UserPromptSubmit"] = [
-        w for w in ups
-        if not (
-            len(w.get("hooks", [])) == 1
-            and w["hooks"][0].get("command") == HOOK_CMD
-        )
-    ]
+    for event, cmd in HOOKS:
+        entries = data.get("hooks", {}).get(event, [])
+        data["hooks"][event] = [
+            w for w in entries
+            if not (
+                len(w.get("hooks", [])) == 1
+                and w["hooks"][0].get("command") == cmd
+            )
+        ]
 
     save(data)
     print("settings.json patched (uninstall).")

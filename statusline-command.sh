@@ -17,6 +17,7 @@ cwd=$(echo "$input"  | jq -r '.workspace.current_dir // ""')
 dir=$(basename "$cwd")
 repo=$(echo "$input" | jq -r '.workspace.repo | if . then .owner + "/" + .name else empty end')
 branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
+git_porcelain=$([ -n "$branch" ] && git -C "$cwd" status --porcelain 2>/dev/null || true)
 
 total_in=$(echo "$input"      | jq -r '.context_window.total_input_tokens // 0')
 turn_out=$(echo "$input"      | jq -r '.context_window.current_usage.output_tokens // 0')
@@ -26,6 +27,26 @@ used=$(echo "$input"     | jq -r '.context_window.used_percentage // empty')
 five_pct=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty')
 week_pct=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty')
 effort=$(echo "$input"   | jq -r '.effort.level // .effort // empty')
+
+# --- Session timer ---
+session_elapsed=""
+if [ -n "$session_id" ]; then
+  start_file="/tmp/claude-start-${session_id}"
+  now=$(date +%s)
+  if [ ! -f "$start_file" ]; then
+    printf '%s' "$now" > "$start_file"
+    session_start=$now
+  else
+    session_start=$(cat "$start_file" 2>/dev/null || echo "$now")
+    [[ "$session_start" =~ ^[0-9]+$ ]] || session_start=$now
+  fi
+  elapsed=$(( now - session_start ))
+  if [ "$elapsed" -ge 3600 ]; then
+    session_elapsed="$(( elapsed / 3600 ))h $(( (elapsed % 3600) / 60 ))m"
+  else
+    session_elapsed="$(( elapsed / 60 ))m"
+  fi
+fi
 
 # --- Accumulate output tokens across turns in a per-session temp file ---
 # File stores JSON: {"last_input": N, "accumulated_output": N}
@@ -76,6 +97,13 @@ if [ "$total_in" -gt 0 ] || [ "$total_out" -gt 0 ] 2>/dev/null; then
   }')
 fi
 
+# --- Active tool (written by PreToolUse hook, deleted by PostToolUse hook) ---
+active_tool=""
+if [ -n "$session_id" ]; then
+  tool_file="/tmp/claude-tool-${session_id}"
+  [ -f "$tool_file" ] && active_tool=$(cat "$tool_file" 2>/dev/null || true)
+fi
+
 # --- Build parts ---
 parts=()
 
@@ -90,14 +118,32 @@ else
   parts+=("$(printf '\033[0;34m%s\033[0m' "$location")")
 fi
 
-# 3. Session activity: cumulative tokens in / out
+# 3. Git state (staged / modified / untracked)
+if [ -n "$git_porcelain" ]; then
+  staged=$(echo "$git_porcelain"    | grep -c '^[MADRC]'  || true)
+  modified=$(echo "$git_porcelain"  | grep -c '^.[MD]'    || true)
+  untracked=$(echo "$git_porcelain" | grep -c '^??'       || true)
+  git_str=""
+  [ "$staged"    -gt 0 ] && git_str="${git_str}+${staged} "
+  [ "$modified"  -gt 0 ] && git_str="${git_str}~${modified} "
+  [ "$untracked" -gt 0 ] && git_str="${git_str}?${untracked}"
+  git_str="${git_str%% }"
+  parts+=("$(printf '\033[0;33m%s\033[0m' "$git_str")")
+elif [ -n "$branch" ]; then
+  parts+=("$(printf '\033[0;32m✓\033[0m')")
+fi
+
+# 4. Session timer
+[ -n "$session_elapsed" ] && parts+=("$(printf '\033[0;37m%s\033[0m' "$session_elapsed")")
+
+# 6. Session activity: cumulative tokens in / out
 if [ "$total_in" -gt 0 ] || [ "$total_out" -gt 0 ] 2>/dev/null; then
   in_fmt=$(fmt_tokens "$total_in")
   out_fmt=$(fmt_tokens "$total_out")
   parts+=("$(printf '\033[0;37m↑%s ↓%s\033[0m' "$in_fmt" "$out_fmt")")
 fi
 
-# 4. Context health: progress bar
+# 7. Context health: progress bar
 if [ -n "$used" ]; then
   used_int=$(printf '%.0f' "$used")
   if   [ "$used_int" -ge "$CTX_CRIT_PCT" ]; then color='\033[0;31m'
@@ -112,10 +158,10 @@ if [ -n "$used" ]; then
   parts+=("$(printf "${color}%s %d%%\033[0m" "$bar" "$used_int")")
 fi
 
-# 5. Cost
+# 8. Cost
 [ -n "$cost_str" ] && parts+=("$(printf '\033[0;33m%s\033[0m' "$cost_str")")
 
-# 6. Rate limits (Claude.ai subscriptions only — hidden on Bedrock)
+# 9. Rate limits (Claude.ai subscriptions only — hidden on Bedrock)
 rate_parts=""
 [ -n "$five_pct" ] && rate_parts="5h:$(printf '%.0f' "$five_pct")%"
 if [ -n "$week_pct" ]; then
@@ -124,8 +170,11 @@ if [ -n "$week_pct" ]; then
 fi
 [ -n "$rate_parts" ] && parts+=("$(printf '\033[0;35m%s\033[0m' "$rate_parts")")
 
-# 7. Effort level
+# 10. Effort level
 [ -n "$effort" ] && parts+=("$(printf '\033[0;36m🧠 %s\033[0m' "$effort")")
+
+# 11. Active tool (ephemeral — only shown mid-turn)
+[ -n "$active_tool" ] && parts+=("$(printf '\033[0;33m⚙ %s\033[0m' "$active_tool")")
 
 # --- Render ---
 printf '%s' "${parts[0]}"
