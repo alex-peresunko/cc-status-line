@@ -1,0 +1,26 @@
+{
+  "_comment": "AWS Bedrock on-demand pricing per million tokens. Update manually when AWS changes rates.",
+  "_source": "https://aws.amazon.com/bedrock/pricing/",
+  "_updated": "2026-05-24",
+  "models": {
+    "claude-3-haiku-20240307-v1:0":          { "input": 0.25,  "output": 1.25  },
+    "claude-3-5-haiku-20241022-v1:0":        { "input": 0.80,  "output": 4.00  },
+    "claude-haiku-4-5-20251001-v1:0":        { "input": 0.80,  "output": 4.00  },
+    "claude-3-sonnet-20240229-v1:0":         { "input": 3.00,  "output": 15.00 },
+    "claude-3-5-sonnet-20240620-v1:0":       { "input": 3.00,  "output": 15.00 },
+    "claude-3-5-sonnet-20241022-v2:0":       { "input": 3.00,  "output": 15.00 },
+    "claude-3-7-sonnet-20250219-v1:0":       { "input": 3.00,  "output": 15.00 },
+    "claude-sonnet-4-5-20250514-v1:0":       { "input": 3.00,  "output": 15.00 },
+    "claude-sonnet-4-6-20251115-v1:0":       { "input": 3.00,  "output": 15.00 },
+    "claude-sonnet-4-6":                     { "input": 3.00,  "output": 15.00 },
+    "claude-3-opus-20240229-v1:0":           { "input": 15.00, "output": 75.00 },
+    "claude-opus-4-5-20250514-v1:0":         { "input": 15.00, "output": 75.00 },
+    "claude-opus-4-6-v1":                    { "input": 15.00, "output": 75.00 },
+    "claude-opus-4-7-20250514-v1:0":         { "input": 15.00, "output": 75.00 }
+  },
+  "fallback_by_family": {
+    "haiku":  { "input": 0.80,  "output": 4.00  },
+    "sonnet": { "input": 3.00,  "output": 15.00 },
+    "opus":   { "input": 15.00, "output": 75.00 }
+  }
+}
