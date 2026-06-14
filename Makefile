@@ -1,8 +1,8 @@
 CLAUDE_DIR := $(HOME)/.claude
-SCRIPT     := statusline-command.sh
+SCRIPT     := statusline.py
 PRICING    := model-pricing-cache.json
 
-.PHONY: install uninstall
+.PHONY: install uninstall test
 
 install:
 	ln -sf $(PWD)/$(SCRIPT)  $(CLAUDE_DIR)/$(SCRIPT)
@@ -14,3 +14,6 @@ uninstall:
 	rm -f $(CLAUDE_DIR)/$(SCRIPT) $(CLAUDE_DIR)/$(PRICING)
 	python3 $(PWD)/scripts/patch-settings.py uninstall
 	@echo "Done. Restart Claude Code to deactivate the status line."
+
+test:
+	uv run --with pytest pytest tests/ -v

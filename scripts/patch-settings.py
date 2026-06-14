@@ -6,7 +6,7 @@ SETTINGS = pathlib.Path.home() / ".claude" / "settings.json"
 
 STATUS_LINE = {
     "type": "command",
-    "command": "bash ~/.claude/statusline-command.sh",
+    "command": "uv run ~/.claude/statusline.py",
 }
 
 # Each hook is (event_name, command_string)
