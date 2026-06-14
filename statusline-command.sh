@@ -3,6 +3,11 @@
 
 input=$(cat)
 
+# --- Config ---
+CTX_BAR_WIDTH=10      # characters in the context progress bar
+CTX_WARN_PCT=50       # yellow above this %
+CTX_CRIT_PCT=70       # red above this %
+
 # --- Extract raw values ---
 model=$(echo "$input"        | jq -r '.model.display_name // "Claude"')
 raw_model_id=$(echo "$input" | jq -r '.model.id // ""')
@@ -11,6 +16,7 @@ model_id=$(echo "$raw_model_id" | sed 's/^[a-z]*\.anthropic\.//')
 cwd=$(echo "$input"  | jq -r '.workspace.current_dir // ""')
 dir=$(basename "$cwd")
 repo=$(echo "$input" | jq -r '.workspace.repo | if . then .owner + "/" + .name else empty end')
+branch=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null)
 
 total_in=$(echo "$input"      | jq -r '.context_window.total_input_tokens // 0')
 turn_out=$(echo "$input"      | jq -r '.context_window.current_usage.output_tokens // 0')
@@ -77,10 +83,11 @@ parts=()
 parts+=("$(printf '\033[0;36m%s\033[0m' "$model")")
 
 # 2. Identity: location
-if [ -n "$repo" ]; then
-  parts+=("$(printf '\033[0;34m%s\033[0m' "$repo")")
+location="${repo:-$dir}"
+if [ -n "$branch" ]; then
+  parts+=("$(printf '\033[0;34m%s\033[0;90m:\033[0;36m%s\033[0m' "$location" "$branch")")
 else
-  parts+=("$(printf '\033[0;34m%s\033[0m' "$dir")")
+  parts+=("$(printf '\033[0;34m%s\033[0m' "$location")")
 fi
 
 # 3. Session activity: cumulative tokens in / out
@@ -90,13 +97,19 @@ if [ "$total_in" -gt 0 ] || [ "$total_out" -gt 0 ] 2>/dev/null; then
   parts+=("$(printf '\033[0;37m↑%s ↓%s\033[0m' "$in_fmt" "$out_fmt")")
 fi
 
-# 4. Context health: ctx% with colour gradient
+# 4. Context health: progress bar
 if [ -n "$used" ]; then
   used_int=$(printf '%.0f' "$used")
-  if   [ "$used_int" -ge 80 ]; then color='\033[0;31m'
-  elif [ "$used_int" -ge 50 ]; then color='\033[0;33m'
-  else                               color='\033[0;32m'; fi
-  parts+=("$(printf "${color}ctx:%s%%\033[0m" "$used_int")")
+  if   [ "$used_int" -ge "$CTX_CRIT_PCT" ]; then color='\033[0;31m'
+  elif [ "$used_int" -ge "$CTX_WARN_PCT" ]; then color='\033[0;33m'
+  else                                           color='\033[0;32m'; fi
+  bar=$(awk -v n="$used_int" -v w="$CTX_BAR_WIDTH" 'BEGIN {
+    filled = int(n / 100 * w + 0.5); if (filled > w) filled = w
+    for (i = 1; i <= filled; i++)    bar = bar "█"
+    for (i = filled+1; i <= w; i++)  bar = bar "░"
+    printf "%s", bar
+  }')
+  parts+=("$(printf "${color}%s %d%%\033[0m" "$bar" "$used_int")")
 fi
 
 # 5. Cost
