@@ -1,6 +1,7 @@
 import json
 import pathlib
 import sys
+from datetime import datetime, timezone
 
 import pytest
 
@@ -32,61 +33,86 @@ def test_format_tokens_M():
 
 
 # ---------------------------------------------------------------------------
-# compute_cost
+# format_countdown / cache_remaining
 # ---------------------------------------------------------------------------
 
-CACHE = {
-    "models": {
-        "claude-sonnet-4-6": {"input": 3.00, "output": 15.00},
-        "claude-3-haiku-20240307-v1:0": {"input": 0.25, "output": 1.25},
-    },
-    "fallback_by_family": {
-        "haiku":  {"input": 0.80,  "output": 4.00},
-        "sonnet": {"input": 3.00,  "output": 15.00},
-        "opus":   {"input": 15.00, "output": 75.00},
-    },
-}
+def test_format_countdown():
+    assert sl.format_countdown(0) == "0:00"
+    assert sl.format_countdown(59) == "0:59"
+    assert sl.format_countdown(60) == "1:00"
+    assert sl.format_countdown(222) == "3:42"
+    assert sl.format_countdown(300) == "5:00"
 
 
-@pytest.fixture()
-def cache_file(tmp_path):
-    p = tmp_path / "model-pricing-cache.json"
-    p.write_text(json.dumps(CACHE))
-    return p
+NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
 
 
-def test_compute_cost_zero_tokens(cache_file):
-    assert sl.compute_cost("claude-sonnet-4-6", 0, 0, cache_file) == ""
+def entry(kind, seconds_ago, **extra):
+    ts = datetime.fromtimestamp(NOW - seconds_ago, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    return json.dumps({"type": kind, "timestamp": ts, **extra})
 
 
-def test_compute_cost_exact_model(cache_file):
-    # 1M in @ $3 + 0 out = $3.00
-    result = sl.compute_cost("claude-sonnet-4-6", 1_000_000, 0, cache_file)
-    assert result == "$3.00"
+def write_transcript(tmp_path, *lines):
+    p = tmp_path / "t.jsonl"
+    p.write_text("\n".join(lines) + "\n")
+    return str(p)
 
 
-def test_compute_cost_family_fallback_haiku(cache_file):
-    # model not in cache but contains "haiku" → use haiku fallback
-    result = sl.compute_cost("claude-haiku-unknown", 1_000_000, 0, cache_file)
-    assert result == "$0.80"
+def remaining(path, ttl=300):
+    return sl.cache_remaining(path, ttl, _now=lambda: NOW)
 
 
-def test_compute_cost_family_fallback_opus(cache_file):
-    result = sl.compute_cost("claude-opus-something", 0, 1_000_000, cache_file)
-    assert result == "$75.00"
+def test_cache_remaining_fresh(tmp_path):
+    path = write_transcript(tmp_path, entry("assistant", 100))
+    assert remaining(path) == 200
 
 
-def test_compute_cost_missing_cache(tmp_path):
-    missing = tmp_path / "no-such-file.json"
-    # Falls back to hardcoded defaults: $3/$15
-    result = sl.compute_cost("any-model", 1_000_000, 0, missing)
-    assert result == "$3.00"
+def test_cache_remaining_expired(tmp_path):
+    path = write_transcript(tmp_path, entry("assistant", 1000))
+    assert remaining(path) == 0
 
 
-def test_compute_cost_combined(cache_file):
-    # 1M in @ $3 + 1M out @ $15 = $18.00
-    result = sl.compute_cost("claude-sonnet-4-6", 1_000_000, 1_000_000, cache_file)
-    assert result == "$18.00"
+def test_cache_remaining_custom_ttl(tmp_path):
+    path = write_transcript(tmp_path, entry("assistant", 100))
+    assert remaining(path, ttl=3600) == 3500
+
+
+def test_cache_remaining_uses_newest_assistant(tmp_path):
+    path = write_transcript(tmp_path, entry("assistant", 250), entry("assistant", 50))
+    assert remaining(path) == 250
+
+
+def test_cache_remaining_ignores_sidechain(tmp_path):
+    path = write_transcript(
+        tmp_path, entry("assistant", 200), entry("assistant", 10, isSidechain=True)
+    )
+    assert remaining(path) == 100
+
+
+def test_cache_remaining_ignores_non_assistant_entries(tmp_path):
+    path = write_transcript(
+        tmp_path, entry("assistant", 200), entry("user", 5), entry("attachment", 1)
+    )
+    assert remaining(path) == 100
+
+
+def test_cache_remaining_tolerates_malformed_lines(tmp_path):
+    path = write_transcript(tmp_path, entry("assistant", 100), "{not json", '{"type": "assistant"}')
+    assert remaining(path) == 200
+
+
+def test_cache_remaining_none_cases(tmp_path):
+    assert remaining("") is None
+    assert remaining(str(tmp_path / "missing.jsonl")) is None
+    assert remaining(write_transcript(tmp_path, entry("user", 5))) is None
+
+
+def test_cache_remaining_reads_only_tail(tmp_path):
+    filler = entry("user", 0, pad="x" * 1000)
+    lines = [entry("assistant", 100)] + [filler] * 400
+    assert remaining(write_transcript(tmp_path, *lines)) is None
+    lines = [filler] * 400 + [entry("assistant", 100)]
+    assert remaining(write_transcript(tmp_path, *lines)) == 200
 
 
 # ---------------------------------------------------------------------------
@@ -148,10 +174,10 @@ def test_accumulate_subsequent_turns(tmp_path):
 
 BASE_FIELDS = dict(
     model="claude-sonnet-4-6",
-    model_id="claude-sonnet-4-6",
     cwd="/tmp/myproject",
     repo="owner/repo",
     session_id="sess-123",
+    transcript_path="/tmp/t.jsonl",
     total_in=50_000,
     turn_out=1_000,
     used_pct=30.0,
@@ -169,7 +195,7 @@ def make_segments(**overrides):
         _session_timer_fn=lambda sid: "5m",
         _accumulate_fn=lambda sid, out: out,
         _active_tool_fn=lambda sid: "",
-        _compute_cost_fn=lambda mid, tin, tout: "$0.15",
+        _cache_remaining_fn=lambda path, ttl: 222,
     )
 
 
@@ -209,7 +235,7 @@ def test_build_segments_git_dirty():
         _session_timer_fn=lambda sid: "5m",
         _accumulate_fn=lambda sid, out: out,
         _active_tool_fn=lambda sid: "",
-        _compute_cost_fn=lambda mid, tin, tout: "$0.15",
+        _cache_remaining_fn=lambda path, ttl: 222,
     )
     combined = joined(segs)
     assert "~1" in combined
@@ -260,10 +286,57 @@ def test_build_segments_active_tool():
         _session_timer_fn=lambda sid: "5m",
         _accumulate_fn=lambda sid, out: out,
         _active_tool_fn=lambda sid: "Bash",
-        _compute_cost_fn=lambda mid, tin, tout: "$0.15",
+        _cache_remaining_fn=lambda path, ttl: 222,
     )
     combined = joined(segs)
     assert "⚙ Bash" in combined
+
+
+def cache_segment(remaining):
+    segs = sl.build_segments(
+        **BASE_FIELDS,
+        _git_info_fn=lambda cwd: ("main", ""),
+        _session_timer_fn=lambda sid: "5m",
+        _accumulate_fn=lambda sid, out: out,
+        _active_tool_fn=lambda sid: "",
+        _cache_remaining_fn=lambda path, ttl: remaining,
+    )
+    return next((s for s in segs if "cache" in s), None)
+
+
+def test_build_segments_cache_countdown():
+    assert strip_ansi(cache_segment(222)) == "cache 3:42"
+
+
+def test_build_segments_cache_colors():
+    assert sl.GREEN in cache_segment(121)
+    assert sl.YELLOW in cache_segment(120)
+    assert sl.YELLOW in cache_segment(30)
+    assert sl.RED in cache_segment(29)
+
+
+def test_build_segments_cache_expired():
+    seg = cache_segment(0)
+    assert strip_ansi(seg) == "cache expired"
+    assert sl.DIM in seg
+
+
+def test_build_segments_cache_absent():
+    assert cache_segment(None) is None
+
+
+def test_build_segments_passes_ttl_and_path():
+    seen = []
+    sl.build_segments(
+        **BASE_FIELDS,
+        cache_ttl=3600,
+        _git_info_fn=lambda cwd: ("main", ""),
+        _session_timer_fn=lambda sid: "5m",
+        _accumulate_fn=lambda sid, out: out,
+        _active_tool_fn=lambda sid: "",
+        _cache_remaining_fn=lambda path, ttl: seen.append((path, ttl)),
+    )
+    assert seen == [("/tmp/t.jsonl", 3600)]
 
 
 def test_build_segments_no_session_id():
@@ -276,14 +349,8 @@ def test_build_segments_no_session_id():
 # parse_input
 # ---------------------------------------------------------------------------
 
-def test_parse_input_vendor_prefix_stripped():
-    data = {"model": {"id": "us.anthropic.claude-sonnet-4-6", "display_name": "Claude"}}
-    result = sl.parse_input(data)
-    assert result["model_id"] == "claude-sonnet-4-6"
-
-
 def test_parse_input_empty_dict():
     result = sl.parse_input({})
     assert result["model"] == "Claude"
-    assert result["model_id"] == ""
+    assert result["transcript_path"] == ""
     assert result["total_in"] == 0
