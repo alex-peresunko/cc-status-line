@@ -3,13 +3,15 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Claude Code status line: model | location | git | tokens | ctx% | cost"""
+"""Claude Code status line: model | location | git | tokens | ctx% | cache"""
 
 import json
 import os
 import pathlib
 import subprocess
 import sys
+import time
+from datetime import datetime
 
 # ANSI color codes
 CYAN    = "\033[0;36m"
@@ -22,9 +24,6 @@ MAGENTA = "\033[0;35m"
 DIM     = "\033[0;90m"
 RESET   = "\033[0m"
 
-PRICING_CACHE = pathlib.Path.home() / ".claude" / "model-pricing-cache.json"
-
-
 def format_tokens(n: int) -> str:
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
@@ -33,33 +32,42 @@ def format_tokens(n: int) -> str:
     return str(n)
 
 
-def compute_cost(model_id: str, total_in: int, total_out: int, cache_path: pathlib.Path = PRICING_CACHE) -> str:
-    if total_in == 0 and total_out == 0:
-        return ""
+CACHE_TTL = 300
+_TRANSCRIPT_TAIL_BYTES = 256 * 1024
 
-    in_rate, out_rate = 3.00, 15.00
-    if cache_path.exists():
+
+def cache_remaining(transcript_path: str, ttl: int = CACHE_TTL, _now=time.time) -> int | None:
+    """Seconds until the prompt cache expires, or None if no main-thread assistant message is found.
+
+    Subagent (sidechain) messages are ignored: they use their own cache.
+    """
+    if not transcript_path:
+        return None
+    try:
+        with open(transcript_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - _TRANSCRIPT_TAIL_BYTES))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = tail.splitlines()
+    if size > _TRANSCRIPT_TAIL_BYTES:
+        lines = lines[1:]  # first line is cut mid-record
+    for line in reversed(lines):
         try:
-            cache = json.loads(cache_path.read_text())
-            models = cache.get("models", {})
-            if model_id in models:
-                in_rate  = models[model_id]["input"]
-                out_rate = models[model_id]["output"]
-            else:
-                family = "sonnet"
-                lower = model_id.lower()
-                if "haiku" in lower:
-                    family = "haiku"
-                elif "opus" in lower:
-                    family = "opus"
-                fallback = cache.get("fallback_by_family", {}).get(family, {})
-                in_rate  = fallback.get("input",  in_rate)
-                out_rate = fallback.get("output", out_rate)
-        except (json.JSONDecodeError, KeyError):
-            pass
+            entry = json.loads(line)
+            if entry.get("type") != "assistant" or entry.get("isSidechain"):
+                continue
+            ts = datetime.fromisoformat(entry["timestamp"].replace("Z", "+00:00")).timestamp()
+        except (ValueError, KeyError, AttributeError, TypeError):
+            continue
+        return max(0, int(ttl - (_now() - ts)))
+    return None
 
-    cost = (total_in / 1_000_000 * in_rate) + (total_out / 1_000_000 * out_rate)
-    return f"${cost:.2f}"
+
+def format_countdown(seconds: int) -> str:
+    return f"{seconds // 60}:{seconds % 60:02d}"
 
 
 _TMP = pathlib.Path("/tmp")
@@ -68,7 +76,6 @@ _TMP = pathlib.Path("/tmp")
 def session_timer(session_id: str, _tmp_dir: pathlib.Path = _TMP) -> str:
     if not session_id:
         return ""
-    import time
     start_file = _tmp_dir / f"claude-start-{session_id}"
     now = int(time.time())
     if not start_file.exists():
@@ -135,18 +142,12 @@ def git_info(cwd: str) -> tuple[str, str]:
 
 def parse_input(data: dict) -> dict:
     model        = data.get("model", {}).get("display_name") or "Claude"
-    raw_model_id = data.get("model", {}).get("id") or ""
-    # Strip vendor prefix (e.g. "us.anthropic." or "aws.anthropic.")
-    model_id = raw_model_id
-    for prefix in ("us.anthropic.", "aws.anthropic.", "anthropic."):
-        if model_id.startswith(prefix):
-            model_id = model_id[len(prefix):]
-            break
 
     cwd        = data.get("workspace", {}).get("current_dir") or ""
     repo_info  = data.get("workspace", {}).get("repo")
     repo       = f"{repo_info['owner']}/{repo_info['name']}" if repo_info else ""
     session_id = data.get("session_id") or ""
+    transcript_path = data.get("transcript_path") or ""
 
     ctx        = data.get("context_window", {})
     total_in   = int(ctx.get("total_input_tokens") or 0)
@@ -161,18 +162,18 @@ def parse_input(data: dict) -> dict:
     effort     = (effort_raw.get("level") if isinstance(effort_raw, dict) else effort_raw) or ""
 
     return dict(
-        model=model, model_id=model_id, cwd=cwd, repo=repo,
-        session_id=session_id, total_in=total_in, turn_out=turn_out,
+        model=model, cwd=cwd, repo=repo,
+        session_id=session_id, transcript_path=transcript_path, total_in=total_in, turn_out=turn_out,
         used_pct=used_pct, five_pct=five_pct, week_pct=week_pct, effort=effort,
     )
 
 
 def build_segments(
     model: str,
-    model_id: str,
     cwd: str,
     repo: str,
     session_id: str,
+    transcript_path: str,
     total_in: int,
     turn_out: int,
     used_pct,
@@ -183,11 +184,12 @@ def build_segments(
     ctx_warn: int = 50,
     ctx_crit: int = 70,
     bar_width: int = 10,
+    cache_ttl: int = CACHE_TTL,
     _git_info_fn=git_info,
     _session_timer_fn=session_timer,
     _accumulate_fn=accumulate_output_tokens,
     _active_tool_fn=active_tool,
-    _compute_cost_fn=compute_cost,
+    _cache_remaining_fn=cache_remaining,
 ) -> list[str]:
     parts = []
 
@@ -238,10 +240,14 @@ def build_segments(
         bar = "█" * filled + "░" * (bar_width - filled)
         parts.append(f"{color}{bar} {used_int}%{RESET}")
 
-    # 7. Cost
-    cost = _compute_cost_fn(model_id, total_in, total_out)
-    if cost:
-        parts.append(f"{YELLOW}{cost}{RESET}")
+    # 7. Cache expiry countdown
+    remaining = _cache_remaining_fn(transcript_path, cache_ttl)
+    if remaining is not None:
+        if remaining == 0:
+            parts.append(f"{DIM}⏳ expired{RESET}")
+        else:
+            color = RED if remaining < 30 else YELLOW if remaining <= 120 else GREEN
+            parts.append(f"{color}⏳ {format_countdown(remaining)}{RESET}")
 
     # 8. Rate limits
     rate_parts = []
@@ -273,6 +279,7 @@ def main() -> None:
     ctx_warn  = int(os.environ.get("CLAUDE_STATUS_CTX_WARN",  "50"))
     ctx_crit  = int(os.environ.get("CLAUDE_STATUS_CTX_CRIT",  "70"))
     bar_width = int(os.environ.get("CLAUDE_STATUS_BAR_WIDTH", "10"))
+    cache_ttl = int(os.environ.get("CLAUDE_STATUS_CACHE_TTL", str(CACHE_TTL)))
 
     try:
         data = json.loads(sys.stdin.read())
@@ -285,6 +292,7 @@ def main() -> None:
         ctx_warn=ctx_warn,
         ctx_crit=ctx_crit,
         bar_width=bar_width,
+        cache_ttl=cache_ttl,
     )
     render(segments)
 
