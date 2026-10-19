@@ -244,10 +244,10 @@ def build_segments(
     remaining = _cache_remaining_fn(transcript_path, cache_ttl)
     if remaining is not None:
         if remaining == 0:
-            parts.append(f"{DIM}⏳ expired{RESET}")
+            parts.append(f"{DIM}cache expired{RESET}")
         else:
             color = RED if remaining < 30 else YELLOW if remaining <= 120 else GREEN
-            parts.append(f"{color}⏳ {format_countdown(remaining)}{RESET}")
+            parts.append(f"{color}cache {format_countdown(remaining)}{RESET}")
 
     # 8. Rate limits
     rate_parts = []

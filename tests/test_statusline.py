@@ -301,11 +301,11 @@ def cache_segment(remaining):
         _active_tool_fn=lambda sid: "",
         _cache_remaining_fn=lambda path, ttl: remaining,
     )
-    return next((s for s in segs if "⏳" in s), None)
+    return next((s for s in segs if "cache" in s), None)
 
 
 def test_build_segments_cache_countdown():
-    assert strip_ansi(cache_segment(222)) == "⏳ 3:42"
+    assert strip_ansi(cache_segment(222)) == "cache 3:42"
 
 
 def test_build_segments_cache_colors():
@@ -317,7 +317,7 @@ def test_build_segments_cache_colors():
 
 def test_build_segments_cache_expired():
     seg = cache_segment(0)
-    assert strip_ansi(seg) == "⏳ expired"
+    assert strip_ansi(seg) == "cache expired"
     assert sl.DIM in seg
 
 
