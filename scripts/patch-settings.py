@@ -7,7 +7,7 @@ SETTINGS = pathlib.Path.home() / ".claude" / "settings.json"
 STATUS_LINE = {
     "type": "command",
     "command": "uv run ~/.claude/statusline.py",
-    "refreshInterval": 1,
+    "refreshInterval": 5,
 }
 
 # Each hook is (event_name, command_string)
