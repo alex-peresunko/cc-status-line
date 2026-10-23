@@ -184,7 +184,7 @@ def build_segments(
     effort: str,
     *,
     ctx_warn: int = 50,
-    ctx_crit: int = 70,
+    ctx_crit: int = 80,
     bar_width: int = 10,
     cache_ttl: int = CACHE_TTL,
     _git_info_fn=git_info,

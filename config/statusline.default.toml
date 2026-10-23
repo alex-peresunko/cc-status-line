@@ -4,7 +4,7 @@
 
 [display]
 ctx_warn  = 50
-ctx_crit  = 70
+ctx_crit  = 80
 bar_width = 10
 
 [cache]
@@ -17,4 +17,4 @@ ttl = 300            # seconds; set 3600 if your main conversation uses the 1h p
 [features.auto_compact]
 enabled = false
 tokens  = 150000     # compact at or above this many context tokens
-within  = 90         # ... when this many seconds or fewer of cache remain
+within  = 30         # ... when this many seconds or fewer of cache remain

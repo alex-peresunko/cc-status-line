@@ -35,7 +35,7 @@ tokens = 1000
     assert cfg.display.ctx_warn == 50
     assert cfg.features["auto_compact"].enabled is True
     assert cfg.features["auto_compact"].tokens == 1000
-    assert cfg.features["auto_compact"].within == 90
+    assert cfg.features["auto_compact"].within == 30
     assert cfg.error is None
 
 

@@ -10,7 +10,7 @@ _SAME_EXPIRY_TOLERANCE = 5
 @dataclass(frozen=True)
 class AutoCompactSettings(Settings):
     tokens: int = 150_000
-    within: int = 90
+    within: int = 30
 
 
 def _already_fired(marker: pathlib.Path, expiry: int) -> bool:

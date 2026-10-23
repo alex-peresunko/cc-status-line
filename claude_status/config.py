@@ -20,7 +20,7 @@ DEFAULT_PATH = pathlib.Path.home() / ".claude" / "statusline.toml"
 @dataclass(frozen=True)
 class Display:
     ctx_warn: int = 50
-    ctx_crit: int = 70
+    ctx_crit: int = 80
     bar_width: int = 10
 
 
