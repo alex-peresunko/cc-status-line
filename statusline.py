@@ -38,11 +38,8 @@ def format_tokens(n: int) -> str:
 _TRANSCRIPT_TAIL_BYTES = 256 * 1024
 
 
-def cache_remaining(transcript_path: str, ttl: int = CACHE_TTL, _now=time.time) -> int | None:
-    """Seconds until the prompt cache expires, or None if no main-thread assistant message is found.
-
-    Subagent (sidechain) messages are ignored: they use their own cache.
-    """
+def _transcript_tail(transcript_path: str) -> list[str] | None:
+    """Complete JSONL lines from the end of the transcript; None if it can't be read."""
     if not transcript_path:
         return None
     try:
@@ -56,6 +53,41 @@ def cache_remaining(transcript_path: str, ttl: int = CACHE_TTL, _now=time.time) 
     lines = tail.splitlines()
     if size > _TRANSCRIPT_TAIL_BYTES:
         lines = lines[1:]  # first line is cut mid-record
+    return lines
+
+
+def tool_in_flight(transcript_path: str) -> bool:
+    """True while a tool call in the current turn has no result yet: running, or awaiting a
+    permission or dialog answer. Read from the transcript, so it doesn't depend on hooks.
+    """
+    called, answered = set(), set()
+    for line in reversed(_transcript_tail(transcript_path) or []):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("isSidechain") or entry.get("type") not in ("assistant", "user"):
+            continue
+        content = (entry.get("message") or {}).get("content")
+        blocks = [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+        if entry["type"] == "assistant":
+            called.update(b["id"] for b in blocks if b.get("type") == "tool_use" and "id" in b)
+            continue
+        results = [b.get("tool_use_id") for b in blocks if b.get("type") == "tool_result"]
+        if not results:
+            break  # the prompt that started this turn
+        answered.update(results)
+    return bool(called - answered)
+
+
+def cache_remaining(transcript_path: str, ttl: int = CACHE_TTL, _now=time.time) -> int | None:
+    """Seconds until the prompt cache expires, or None if no main-thread assistant message is found.
+
+    Subagent (sidechain) messages are ignored: they use their own cache.
+    """
+    lines = _transcript_tail(transcript_path)
+    if lines is None:
+        return None
     for line in reversed(lines):
         try:
             entry = json.loads(line)
@@ -283,14 +315,14 @@ def build_context(
     env=os.environ,
     *,
     _cache_remaining_fn=cache_remaining,
-    _active_tool_fn=active_tool,
+    _tool_in_flight_fn=tool_in_flight,
     _now=time.time,
 ) -> Context:
     return Context(
         session_id=fields["session_id"],
         total_in=fields["total_in"],
         cache_remaining=_cache_remaining_fn(fields["transcript_path"], cache_ttl),
-        active_tool=_active_tool_fn(fields["session_id"]),
+        tool_in_flight=_tool_in_flight_fn(fields["transcript_path"]),
         env=env,
         now=_now(),
         state_dir=_TMP,

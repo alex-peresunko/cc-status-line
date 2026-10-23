@@ -23,11 +23,10 @@ def _already_fired(marker: pathlib.Path, expiry: int) -> bool:
 def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=terminal.spawn_detached) -> bool:
     """Type /compact into the session's terminal at most once per prompt-cache expiry.
 
-    `ctx.active_tool` is set by the PreToolUse hook while a tool runs or awaits a permission
-    prompt; typing Enter then could approve that prompt.
+    Skipped while a tool call is in flight: typing Enter then could approve a pending permission prompt.
     """
     remaining = ctx.cache_remaining
-    if (not ctx.session_id or ctx.active_tool or remaining is None
+    if (not ctx.session_id or ctx.tool_in_flight or remaining is None
             or ctx.total_in < settings.tokens or not 0 < remaining <= settings.within):
         return False
     cmd = terminal.type_line(ctx.env, "/compact")

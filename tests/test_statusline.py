@@ -119,6 +119,62 @@ def test_cache_remaining_reads_only_tail(tmp_path):
 # session_timer
 # ---------------------------------------------------------------------------
 
+def tool_use(*ids, **extra):
+    blocks = [{"type": "tool_use", "id": i, "name": "Bash"} for i in ids]
+    return entry("assistant", 10, message={"content": blocks}, **extra)
+
+
+def tool_result(*ids, **extra):
+    blocks = [{"type": "tool_result", "tool_use_id": i} for i in ids]
+    return entry("user", 9, message={"content": blocks}, **extra)
+
+
+def prompt(text="hi"):
+    return entry("user", 30, message={"content": text})
+
+
+def in_flight(tmp_path, *lines):
+    return sl.tool_in_flight(write_transcript(tmp_path, *lines))
+
+
+def test_tool_in_flight_call_without_result(tmp_path):
+    assert in_flight(tmp_path, prompt(), tool_use("a"))
+
+
+def test_tool_in_flight_call_answered(tmp_path):
+    assert not in_flight(tmp_path, prompt(), tool_use("a"), tool_result("a"))
+
+
+def test_tool_in_flight_parallel_calls_need_every_result(tmp_path):
+    assert in_flight(tmp_path, prompt(), tool_use("a", "b"), tool_result("a"))
+    assert not in_flight(tmp_path, prompt(), tool_use("a", "b"), tool_result("a"), tool_result("b"))
+
+
+def test_tool_in_flight_idle_after_final_answer(tmp_path):
+    text = entry("assistant", 5, message={"content": [{"type": "text", "text": "done"}]})
+    assert not in_flight(tmp_path, prompt(), tool_use("a"), tool_result("a"), text)
+
+
+def test_tool_in_flight_ignores_unanswered_calls_of_earlier_turns(tmp_path):
+    assert not in_flight(tmp_path, tool_use("old"), prompt("next"), tool_use("a"), tool_result("a"))
+
+
+def test_tool_in_flight_ignores_sidechain(tmp_path):
+    assert not in_flight(tmp_path, prompt(), tool_use("sub", isSidechain=True))
+    assert in_flight(tmp_path, prompt(), tool_use("a"), tool_result("sub", isSidechain=True))
+
+
+def test_tool_in_flight_ignores_other_entry_types(tmp_path):
+    blob = entry("api-request-blob", 1, message={"content": [{"type": "tool_use", "id": "x"}]})
+    assert not in_flight(tmp_path, prompt(), blob)
+
+
+def test_tool_in_flight_unreadable_or_empty(tmp_path):
+    assert not sl.tool_in_flight("")
+    assert not sl.tool_in_flight(str(tmp_path / "missing.jsonl"))
+    assert not in_flight(tmp_path, "not json", "[1, 2]", "")
+
+
 def test_session_timer_empty_id():
     assert sl.session_timer("") == ""
 
@@ -356,11 +412,11 @@ def test_build_context_maps_fields(tmp_path):
         cache_ttl=3600,
         env={"TMUX_PANE": "%2"},
         _cache_remaining_fn=lambda path, ttl: seen.append((path, ttl)) or 77,
-        _active_tool_fn=lambda sid: "Bash",
+        _tool_in_flight_fn=lambda path: path == "/tmp/t.jsonl",
         _now=lambda: 42.0,
     )
     assert seen == [("/tmp/t.jsonl", 3600)]
-    assert (ctx.session_id, ctx.total_in, ctx.cache_remaining, ctx.active_tool) == ("s1", 50_000, 77, "Bash")
+    assert (ctx.session_id, ctx.total_in, ctx.cache_remaining, ctx.tool_in_flight) == ("s1", 50_000, 77, True)
     assert ctx.env == {"TMUX_PANE": "%2"}
     assert ctx.now == 42.0
 

@@ -10,26 +10,36 @@ STATUS_LINE = {
     "refreshInterval": 5,
 }
 
+def _jq(field):
+    # printf, not echo: sh's echo expands the \n escapes inside the JSON and jq then rejects it
+    return f"""$(printf '%s' "$input" | jq -r '.{field} // ""')"""
+
+
+def _legacy(cmd):
+    """The echo-based form of `cmd`, which earlier installs wrote to settings.json."""
+    return cmd.replace("printf '%s' \"$input\"", 'echo "$input"')
+
+
 # Each hook is (event_name, command_string)
 HOOKS = [
     (
         "UserPromptSubmit",
         'input=$(cat); '
-        'sid=$(echo "$input" | jq -r \'.session_id // ""\'); '
-        'prompt=$(echo "$input" | jq -r \'.prompt // ""\'); '
+        f'sid={_jq("session_id")}; '
+        f'prompt={_jq("prompt")}; '
         '[ "$prompt" = "/clear" ] && [ -n "$sid" ] && rm -f "/tmp/claude-out-tokens-${sid}" || true',
     ),
     (
         "PreToolUse",
         'input=$(cat); '
-        'sid=$(echo "$input" | jq -r \'.session_id // ""\'); '
-        'tool=$(echo "$input" | jq -r \'.tool_name // ""\'); '
+        f'sid={_jq("session_id")}; '
+        f'tool={_jq("tool_name")}; '
         '[ -n "$sid" ] && [ -n "$tool" ] && printf "%s" "$tool" > "/tmp/claude-tool-${sid}" || true',
     ),
     (
         "PostToolUse",
         'input=$(cat); '
-        'sid=$(echo "$input" | jq -r \'.session_id // ""\'); '
+        f'sid={_jq("session_id")}; '
         '[ -n "$sid" ] && rm -f "/tmp/claude-tool-${sid}" || true',
     ),
 ]
@@ -58,6 +68,10 @@ def install():
 
     for event, cmd in HOOKS:
         data["hooks"].setdefault(event, [])
+        for w in data["hooks"][event]:
+            for h in w.get("hooks", []):
+                if h.get("command") == _legacy(cmd):
+                    h["command"] = cmd
         if cmd not in _existing_cmds(data, event):
             data["hooks"][event].append({"hooks": [{"type": "command", "command": cmd}]})
 
@@ -75,7 +89,7 @@ def uninstall():
             w for w in entries
             if not (
                 len(w.get("hooks", [])) == 1
-                and w["hooks"][0].get("command") == cmd
+                and w["hooks"][0].get("command") in (cmd, _legacy(cmd))
             )
         ]
 

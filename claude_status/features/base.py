@@ -10,7 +10,7 @@ class Context:
     session_id: str
     total_in: int
     cache_remaining: int | None
-    active_tool: str
+    tool_in_flight: bool
     env: Mapping[str, str]
     now: float
     state_dir: pathlib.Path
