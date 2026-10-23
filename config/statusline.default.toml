@@ -1,0 +1,20 @@
+# Claude Code status line configuration (installed to ~/.claude/statusline.toml).
+# Re-read on every refresh: edits apply within seconds, no restart needed.
+# The CLAUDE_STATUS_CTX_WARN / _CTX_CRIT / _BAR_WIDTH / _CACHE_TTL env vars still override [display] and [cache].
+
+[display]
+ctx_warn  = 50
+ctx_crit  = 70
+bar_width = 10
+
+[cache]
+ttl = 300            # seconds; set 3600 if your main conversation uses the 1h prompt cache TTL
+
+# Types /compact into this session's terminal (tmux or iTerm2, auto-detected) when the context
+# is large and the prompt cache is about to expire. Compacting while the cache is warm is far
+# cheaper than after it expires. Inert in other terminals.
+# Caveat: a half-typed prompt at that moment gets "/compact" appended to it.
+[features.auto_compact]
+enabled = false
+tokens  = 150000     # compact at or above this many context tokens
+within  = 90         # ... when this many seconds or fewer of cache remain

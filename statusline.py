@@ -13,6 +13,9 @@ import sys
 import time
 from datetime import datetime
 
+from claude_status.config import CACHE_TTL, load as load_config
+from claude_status.features import Context, run_enabled
+
 # ANSI color codes
 CYAN    = "\033[0;36m"
 BLUE    = "\033[0;34m"
@@ -32,7 +35,6 @@ def format_tokens(n: int) -> str:
     return str(n)
 
 
-CACHE_TTL = 300
 _TRANSCRIPT_TAIL_BYTES = 256 * 1024
 
 
@@ -275,11 +277,28 @@ def render(segments: list[str]) -> None:
     print(sep.join(segments))
 
 
+def build_context(
+    fields: dict,
+    cache_ttl: int,
+    env=os.environ,
+    *,
+    _cache_remaining_fn=cache_remaining,
+    _active_tool_fn=active_tool,
+    _now=time.time,
+) -> Context:
+    return Context(
+        session_id=fields["session_id"],
+        total_in=fields["total_in"],
+        cache_remaining=_cache_remaining_fn(fields["transcript_path"], cache_ttl),
+        active_tool=_active_tool_fn(fields["session_id"]),
+        env=env,
+        now=_now(),
+        state_dir=_TMP,
+    )
+
+
 def main() -> None:
-    ctx_warn  = int(os.environ.get("CLAUDE_STATUS_CTX_WARN",  "50"))
-    ctx_crit  = int(os.environ.get("CLAUDE_STATUS_CTX_CRIT",  "70"))
-    bar_width = int(os.environ.get("CLAUDE_STATUS_BAR_WIDTH", "10"))
-    cache_ttl = int(os.environ.get("CLAUDE_STATUS_CACHE_TTL", str(CACHE_TTL)))
+    config = load_config()
 
     try:
         data = json.loads(sys.stdin.read())
@@ -289,12 +308,18 @@ def main() -> None:
     fields = parse_input(data)
     segments = build_segments(
         **fields,
-        ctx_warn=ctx_warn,
-        ctx_crit=ctx_crit,
-        bar_width=bar_width,
-        cache_ttl=cache_ttl,
+        ctx_warn=config.display.ctx_warn,
+        ctx_crit=config.display.ctx_crit,
+        bar_width=config.display.bar_width,
+        cache_ttl=config.cache.ttl,
     )
+    if config.error:
+        print(f"claude-status: {config.error}", file=sys.stderr)
+        segments.append(f"{RED}cfg error{RESET}")
     render(segments)
+
+    if any(s.enabled for s in config.features.values()):
+        run_enabled(config.features, build_context(fields, config.cache.ttl))
 
 
 if __name__ == "__main__":

@@ -346,6 +346,26 @@ def test_build_segments_no_session_id():
 
 
 # ---------------------------------------------------------------------------
+# build_context
+# ---------------------------------------------------------------------------
+
+def test_build_context_maps_fields(tmp_path):
+    seen = []
+    ctx = sl.build_context(
+        {**BASE_FIELDS, "session_id": "s1"},
+        cache_ttl=3600,
+        env={"TMUX_PANE": "%2"},
+        _cache_remaining_fn=lambda path, ttl: seen.append((path, ttl)) or 77,
+        _active_tool_fn=lambda sid: "Bash",
+        _now=lambda: 42.0,
+    )
+    assert seen == [("/tmp/t.jsonl", 3600)]
+    assert (ctx.session_id, ctx.total_in, ctx.cache_remaining, ctx.active_tool) == ("s1", 50_000, 77, "Bash")
+    assert ctx.env == {"TMUX_PANE": "%2"}
+    assert ctx.now == 42.0
+
+
+# ---------------------------------------------------------------------------
 # parse_input
 # ---------------------------------------------------------------------------
 
