@@ -175,6 +175,50 @@ def test_tool_in_flight_unreadable_or_empty(tmp_path):
     assert not in_flight(tmp_path, "not json", "[1, 2]", "")
 
 
+def launched(agent_id, **extra):
+    return entry("user", 20, message={"content": [{"type": "tool_result"}]},
+                 toolUseResult={"isAsync": True, "status": "async_launched", "agentId": agent_id}, **extra)
+
+
+def finished(*agent_ids, **extra):
+    body = "".join(f"<task-id>{a}</task-id>\n<status>completed</status>\n" for a in agent_ids)
+    return entry("user", 5, message={"content": f"<task-notification>\n{body}</task-notification>"}, **extra)
+
+
+def agents_running(tmp_path, *lines):
+    return sl.background_agents_running(write_transcript(tmp_path, *lines))
+
+
+def test_background_agent_running_until_notified(tmp_path):
+    assert agents_running(tmp_path, prompt(), launched("a"))
+    assert not agents_running(tmp_path, prompt(), launched("a"), finished("a"))
+
+
+def test_background_agents_need_every_notification(tmp_path):
+    assert agents_running(tmp_path, launched("a"), launched("b"), finished("a"))
+    assert not agents_running(tmp_path, launched("a"), launched("b"), finished("a"), finished("b"))
+
+
+def test_background_agents_span_turns(tmp_path):
+    assert agents_running(tmp_path, prompt(), launched("a"), prompt("next"), tool_use("t"), tool_result("t"))
+
+
+def test_background_agent_ignores_unrelated_notifications_and_sidechain(tmp_path):
+    assert agents_running(tmp_path, launched("a"), finished("other"))
+    assert not agents_running(tmp_path, launched("a", isSidechain=True))
+    assert agents_running(tmp_path, launched("a"), finished("a", isSidechain=True))
+
+
+def test_foreground_tool_results_are_not_background_agents(tmp_path):
+    assert not agents_running(tmp_path, prompt(), tool_use("a"), tool_result("a"))
+
+
+def test_background_agents_unreadable_or_empty(tmp_path):
+    assert not sl.background_agents_running("")
+    assert not sl.background_agents_running(str(tmp_path / "missing.jsonl"))
+    assert not agents_running(tmp_path, "not json", "[1, 2]", "")
+
+
 def test_session_timer_empty_id():
     assert sl.session_timer("") == ""
 
@@ -413,10 +457,12 @@ def test_build_context_maps_fields(tmp_path):
         env={"TMUX_PANE": "%2"},
         _cache_remaining_fn=lambda path, ttl: seen.append((path, ttl)) or 77,
         _tool_in_flight_fn=lambda path: path == "/tmp/t.jsonl",
+        _background_agents_fn=lambda path: path != "/tmp/t.jsonl",
         _now=lambda: 42.0,
     )
     assert seen == [("/tmp/t.jsonl", 3600)]
     assert (ctx.session_id, ctx.total_in, ctx.cache_remaining, ctx.tool_in_flight) == ("s1", 50_000, 77, True)
+    assert ctx.background_agents is False
     assert ctx.env == {"TMUX_PANE": "%2"}
     assert ctx.now == 42.0
 

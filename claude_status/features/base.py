@@ -11,6 +11,7 @@ class Context:
     total_in: int
     cache_remaining: int | None
     tool_in_flight: bool
+    background_agents: bool
     env: Mapping[str, str]
     now: float
     state_dir: pathlib.Path

@@ -12,7 +12,7 @@ SETTINGS = AutoCompactSettings(enabled=True, tokens=100_000, within=90)
 
 def ctx(tmp_path, **overrides):
     fields = dict(
-        session_id="sess-1", total_in=120_000, cache_remaining=60, tool_in_flight=False,
+        session_id="sess-1", total_in=120_000, cache_remaining=60, tool_in_flight=False, background_agents=False,
         env=TMUX, now=1_000_000.0, state_dir=tmp_path,
     )
     return Context(**{**fields, **overrides})
@@ -45,6 +45,11 @@ def test_never_when_cache_expired_or_unknown(tmp_path):
 
 def test_not_while_tool_in_flight(tmp_path):
     assert not fire(tmp_path, tool_in_flight=True)[0]
+
+
+def test_not_while_background_agents_running(tmp_path):
+    assert not fire(tmp_path, background_agents=True)[0]
+    assert not list(tmp_path.iterdir())
 
 
 def test_needs_session_id_and_known_terminal(tmp_path):

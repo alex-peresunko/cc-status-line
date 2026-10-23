@@ -8,6 +8,7 @@
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -78,6 +79,32 @@ def tool_in_flight(transcript_path: str) -> bool:
             break  # the prompt that started this turn
         answered.update(results)
     return bool(called - answered)
+
+
+_TASK_ID = re.compile(r"<task-id>([^<]+)</task-id>")
+
+
+def background_agents_running(transcript_path: str) -> bool:
+    """True while a background subagent launched in the transcript tail has not reported completion.
+
+    A launch is a tool result with status "async_launched"; completion is a user entry holding
+    a <task-notification> for the same agent id. A launch older than the tail is not seen.
+    """
+    running = set()
+    for line in _transcript_tail(transcript_path) or []:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("isSidechain") or entry.get("type") != "user":
+            continue
+        launch = entry.get("toolUseResult")
+        if isinstance(launch, dict) and launch.get("status") == "async_launched" and launch.get("agentId"):
+            running.add(launch["agentId"])
+        content = (entry.get("message") or {}).get("content")
+        if isinstance(content, str) and content.startswith("<task-notification>"):
+            running.difference_update(_TASK_ID.findall(content))
+    return bool(running)
 
 
 def cache_remaining(transcript_path: str, ttl: int = CACHE_TTL, _now=time.time) -> int | None:
@@ -316,6 +343,7 @@ def build_context(
     *,
     _cache_remaining_fn=cache_remaining,
     _tool_in_flight_fn=tool_in_flight,
+    _background_agents_fn=background_agents_running,
     _now=time.time,
 ) -> Context:
     return Context(
@@ -323,6 +351,7 @@ def build_context(
         total_in=fields["total_in"],
         cache_remaining=_cache_remaining_fn(fields["transcript_path"], cache_ttl),
         tool_in_flight=_tool_in_flight_fn(fields["transcript_path"]),
+        background_agents=_background_agents_fn(fields["transcript_path"]),
         env=env,
         now=_now(),
         state_dir=_TMP,
