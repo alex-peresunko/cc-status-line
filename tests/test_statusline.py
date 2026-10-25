@@ -322,7 +322,8 @@ USAGE = {"output_tokens": 56_789,
 
 BASE_FIELDS = dict(
     model="claude-sonnet-4-6",
-    cwd="/tmp/myproject",
+    cwd="/tmp/myproject/sub",
+    project="myproject",
     session_id="sess-123",
     transcript_path="/tmp/t.jsonl",
     used_pct=30.0,
@@ -357,10 +358,19 @@ def test_build_segments_model_present():
     assert any("claude-sonnet-4-6" in strip_ansi(s) for s in segs)
 
 
-def test_build_segments_branch_without_location():
-    segs = make_segments()
-    assert strip_ansi(segs[1]) == "main"
-    assert "myproject" not in joined(segs)
+def test_build_segments_project_and_branch():
+    assert strip_ansi(make_segments()[1]) == "myproject:main"
+
+
+def test_build_segments_project_without_git():
+    segs = sl.build_segments(
+        **BASE_FIELDS,
+        _git_branch_fn=lambda cwd: "",
+        _usage_fn=lambda sid, path: USAGE,
+        _active_tool_fn=lambda sid: "",
+        _cache_remaining_fn=lambda path, ttl: 222,
+    )
+    assert strip_ansi(segs[1]) == "myproject"
 
 
 def test_build_segments_tokens():
@@ -497,6 +507,12 @@ def test_build_context_maps_fields(tmp_path):
 # ---------------------------------------------------------------------------
 # parse_input
 # ---------------------------------------------------------------------------
+
+def test_parse_input_project_is_start_folder():
+    workspace = {"current_dir": "/home/u/repo/src", "project_dir": "/home/u/repo/"}
+    assert sl.parse_input({"workspace": workspace})["project"] == "repo"
+    assert sl.parse_input({"workspace": {"current_dir": "/home/u/other"}})["project"] == "other"
+
 
 def test_parse_input_empty_dict():
     result = sl.parse_input({})

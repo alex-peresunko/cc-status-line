@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Claude Code status line: model | branch | tokens | ctx% | cache"""
+"""Claude Code status line: model | project:branch | tokens | ctx% | cache"""
 
 import json
 import os
@@ -25,6 +25,7 @@ DIM     = "\033[0;90m"
 
 # Segment colors (256-color palette)
 MODEL   = "\033[1;38;5;39m"
+PROJECT = "\033[38;5;117m"
 BRANCH  = "\033[38;5;147m"
 TOKENS  = "\033[38;5;253m"
 LABEL   = "\033[38;5;243m"
@@ -229,7 +230,9 @@ def git_branch(cwd: str) -> str:
 def parse_input(data: dict) -> dict:
     model        = data.get("model", {}).get("display_name") or "Claude"
 
-    cwd        = data.get("workspace", {}).get("current_dir") or ""
+    workspace  = data.get("workspace", {})
+    cwd        = workspace.get("current_dir") or ""
+    project    = os.path.basename((workspace.get("project_dir") or cwd).rstrip("/"))
     session_id = data.get("session_id") or ""
     transcript_path = data.get("transcript_path") or ""
 
@@ -245,7 +248,7 @@ def parse_input(data: dict) -> dict:
     effort     = (effort_raw.get("level") if isinstance(effort_raw, dict) else effort_raw) or ""
 
     return dict(
-        model=model, cwd=cwd,
+        model=model, cwd=cwd, project=project,
         session_id=session_id, transcript_path=transcript_path, total_in=total_in,
         used_pct=used_pct, five_pct=five_pct, week_pct=week_pct, effort=effort,
     )
@@ -254,6 +257,7 @@ def parse_input(data: dict) -> dict:
 def build_segments(
     model: str,
     cwd: str,
+    project: str,
     session_id: str,
     transcript_path: str,
     used_pct,
@@ -275,10 +279,12 @@ def build_segments(
     # 1. Model
     parts.append(f"{MODEL}{model}{RESET}")
 
-    # 2. Branch
+    # 2. Project and branch
     branch = _git_branch_fn(cwd)
-    if branch:
-        parts.append(f"{BRANCH}{branch}{RESET}")
+    if project and branch:
+        parts.append(f"{PROJECT}{project}{LABEL}:{BRANCH}{branch}{RESET}")
+    elif project or branch:
+        parts.append(f"{PROJECT}{project}{RESET}" if project else f"{BRANCH}{branch}{RESET}")
 
     # 3. Tokens
     usage = _usage_fn(session_id, transcript_path)
