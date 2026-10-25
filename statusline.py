@@ -18,14 +18,20 @@ from claude_status.config import CACHE_TTL, load as load_config
 from claude_status.features import Context, run_enabled
 
 # ANSI color codes
-CYAN    = "\033[0;36m"
-BLUE    = "\033[0;34m"
 GREEN   = "\033[0;32m"
 YELLOW  = "\033[0;33m"
 RED     = "\033[0;31m"
-WHITE   = "\033[0;37m"
-MAGENTA = "\033[0;35m"
 DIM     = "\033[0;90m"
+
+# Segment colors (256-color palette)
+MODEL   = "\033[1;38;5;39m"
+BRANCH  = "\033[38;5;147m"
+TOKENS  = "\033[38;5;253m"
+LABEL   = "\033[38;5;243m"
+RATE    = "\033[38;5;110m"
+EFFORT  = "\033[38;5;80m"
+TOOL    = "\033[38;5;222m"
+SEP     = "\033[38;5;238m"
 RESET   = "\033[0m"
 
 def format_tokens(n: int) -> str:
@@ -267,20 +273,20 @@ def build_segments(
     parts = []
 
     # 1. Model
-    parts.append(f"{CYAN}{model}{RESET}")
+    parts.append(f"{MODEL}{model}{RESET}")
 
     # 2. Branch
     branch = _git_branch_fn(cwd)
     if branch:
-        parts.append(f"{CYAN}{branch}{RESET}")
+        parts.append(f"{BRANCH}{branch}{RESET}")
 
     # 3. Tokens
     usage = _usage_fn(session_id, transcript_path)
     if any(usage.values()):
         parts.append(
-            f"{WHITE}↓{format_tokens(usage['output_tokens'])} "
-            f"{DIM}R{WHITE}{format_tokens(usage['cache_read_input_tokens'])} "
-            f"{DIM}W{WHITE}{format_tokens(usage['cache_creation_input_tokens'])}{RESET}"
+            f"{TOKENS}↓{format_tokens(usage['output_tokens'])} "
+            f"{LABEL}R{TOKENS}{format_tokens(usage['cache_read_input_tokens'])} "
+            f"{LABEL}W{TOKENS}{format_tokens(usage['cache_creation_input_tokens'])}{RESET}"
         )
 
     # 4. Context bar
@@ -312,22 +318,22 @@ def build_segments(
     if week_pct is not None:
         rate_parts.append(f"7d:{round(float(week_pct))}%")
     if rate_parts:
-        parts.append(f"{MAGENTA}{' '.join(rate_parts)}{RESET}")
+        parts.append(f"{RATE}{' '.join(rate_parts)}{RESET}")
 
     # 7. Effort
     if effort:
-        parts.append(f"{CYAN}🧠 {effort}{RESET}")
+        parts.append(f"{EFFORT}🧠 {effort}{RESET}")
 
     # 8. Active tool
     tool = _active_tool_fn(session_id)
     if tool:
-        parts.append(f"{YELLOW}⚙ {tool}{RESET}")
+        parts.append(f"{TOOL}⚙ {tool}{RESET}")
 
     return parts
 
 
 def render(segments: list[str]) -> None:
-    sep = f" {DIM}|{RESET} "
+    sep = f" {SEP}|{RESET} "
     print(sep.join(segments))
 
 
