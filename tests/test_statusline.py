@@ -326,6 +326,7 @@ BASE_FIELDS = dict(
     project="myproject",
     session_id="sess-123",
     transcript_path="/tmp/t.jsonl",
+    total_in=123_456,
     used_pct=30.0,
     five_pct=None,
     week_pct=None,
@@ -386,6 +387,11 @@ def test_build_segments_tokens_absent_without_usage():
         _cache_remaining_fn=lambda path, ttl: None,
     )
     assert "↓" not in joined(segs)
+
+
+def test_build_segments_ctx_bar_shows_context_size():
+    assert "███░░░░░░░ 123k (30%) |" in joined(make_segments())
+    assert "███░░░░░░░ 30% |" in joined(make_segments(total_in=0))
 
 
 def test_build_segments_ctx_bar_green():
@@ -489,7 +495,7 @@ def test_build_segments_no_session_id():
 def test_build_context_maps_fields(tmp_path):
     seen = []
     ctx = sl.build_context(
-        {**BASE_FIELDS, "session_id": "s1", "total_in": 50_000},
+        {**BASE_FIELDS, "session_id": "s1"},
         cache_ttl=3600,
         env={"TMUX_PANE": "%2"},
         _cache_remaining_fn=lambda path, ttl: seen.append((path, ttl)) or 77,
@@ -498,7 +504,7 @@ def test_build_context_maps_fields(tmp_path):
         _now=lambda: 42.0,
     )
     assert seen == [("/tmp/t.jsonl", 3600)]
-    assert (ctx.session_id, ctx.total_in, ctx.cache_remaining, ctx.tool_in_flight) == ("s1", 50_000, 77, True)
+    assert (ctx.session_id, ctx.total_in, ctx.cache_remaining, ctx.tool_in_flight) == ("s1", 123_456, 77, True)
     assert ctx.background_agents is False
     assert ctx.env == {"TMUX_PANE": "%2"}
     assert ctx.now == 42.0

@@ -260,6 +260,7 @@ def build_segments(
     project: str,
     session_id: str,
     transcript_path: str,
+    total_in: int,
     used_pct,
     five_pct,
     week_pct,
@@ -306,7 +307,8 @@ def build_segments(
             color = GREEN
         filled = min(round(used_int / 100 * bar_width), bar_width)
         bar = "█" * filled + "░" * (bar_width - filled)
-        parts.append(f"{color}{bar} {used_int}%{RESET}")
+        fill = f"{format_tokens(total_in)} ({used_int}%)" if total_in else f"{used_int}%"
+        parts.append(f"{color}{bar} {fill}{RESET}")
 
     # 5. Cache expiry countdown
     remaining = _cache_remaining_fn(transcript_path, cache_ttl)
@@ -375,7 +377,7 @@ def main() -> None:
 
     fields = parse_input(data)
     segments = build_segments(
-        **{k: v for k, v in fields.items() if k != "total_in"},
+        **fields,
         ctx_warn=config.display.ctx_warn,
         ctx_crit=config.display.ctx_crit,
         bar_width=config.display.bar_width,
