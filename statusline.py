@@ -153,21 +153,61 @@ def session_timer(session_id: str, _tmp_dir: pathlib.Path = _TMP) -> str:
     return f"{elapsed // 60}m"
 
 
-def accumulate_output_tokens(session_id: str, turn_out: int, _tmp_dir: pathlib.Path = _TMP) -> int:
-    if not session_id:
-        return turn_out
-    acc_file = _tmp_dir / f"claude-out-tokens-{session_id}"
-    prev = 0
-    if acc_file.exists():
+def session_output_tokens(session_id: str, transcript_path: str, _tmp_dir: pathlib.Path = _TMP) -> int:
+    """Output tokens of the main thread's API responses in the transcript.
+
+    The transcript is read incrementally: the state file keeps the offset of the first unread line.
+    A response is written as several consecutive lines sharing a message id and usage, so a repeated id
+    adds only the difference from what was already counted for it.
+    """
+    if not transcript_path:
+        return 0
+    state_file = _tmp_dir / f"claude-out-tokens-{session_id}" if session_id else None
+    state = {}
+    if state_file and state_file.exists():
         try:
-            prev = int(acc_file.read_text().strip())
+            state = json.loads(state_file.read_text())
         except (ValueError, OSError):
-            prev = 0
-    total = prev + turn_out
+            state = {}
+        if not isinstance(state, dict) or state.get("path") != transcript_path:
+            state = {}
+    offset = int(state.get("offset") or 0)
+    total = int(state.get("total") or 0)
+    last_id = state.get("last_id")
+    last_out = int(state.get("last_out") or 0)
     try:
-        acc_file.write_text(str(total))
+        with open(transcript_path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            if f.tell() < offset:  # transcript replaced or truncated
+                offset, total, last_id, last_out = 0, 0, None, 0
+            f.seek(offset)
+            chunk = f.read()
     except OSError:
-        pass
+        return total
+    complete = chunk[: chunk.rfind(b"\n") + 1]  # a trailing partial line is read on a later tick
+    for line in complete.splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(entry, dict) or entry.get("type") != "assistant" or entry.get("isSidechain"):
+            continue
+        message = entry.get("message") or {}
+        out = int((message.get("usage") or {}).get("output_tokens") or 0)
+        msg_id = message.get("id")
+        if msg_id is not None and msg_id == last_id:
+            total += out - last_out
+        else:
+            total += out
+        last_id, last_out = msg_id, out
+    if state_file:
+        try:
+            state_file.write_text(json.dumps({
+                "path": transcript_path, "offset": offset + len(complete),
+                "total": total, "last_id": last_id, "last_out": last_out,
+            }))
+        except OSError:
+            pass
     return total
 
 
@@ -212,7 +252,6 @@ def parse_input(data: dict) -> dict:
 
     ctx        = data.get("context_window", {})
     total_in   = int(ctx.get("total_input_tokens") or 0)
-    turn_out   = int((ctx.get("current_usage") or {}).get("output_tokens") or 0)
     used_pct   = ctx.get("used_percentage")
 
     rl         = data.get("rate_limits", {})
@@ -224,7 +263,7 @@ def parse_input(data: dict) -> dict:
 
     return dict(
         model=model, cwd=cwd, repo=repo,
-        session_id=session_id, transcript_path=transcript_path, total_in=total_in, turn_out=turn_out,
+        session_id=session_id, transcript_path=transcript_path, total_in=total_in,
         used_pct=used_pct, five_pct=five_pct, week_pct=week_pct, effort=effort,
     )
 
@@ -236,7 +275,6 @@ def build_segments(
     session_id: str,
     transcript_path: str,
     total_in: int,
-    turn_out: int,
     used_pct,
     five_pct,
     week_pct,
@@ -248,7 +286,7 @@ def build_segments(
     cache_ttl: int = CACHE_TTL,
     _git_info_fn=git_info,
     _session_timer_fn=session_timer,
-    _accumulate_fn=accumulate_output_tokens,
+    _output_tokens_fn=session_output_tokens,
     _active_tool_fn=active_tool,
     _cache_remaining_fn=cache_remaining,
 ) -> list[str]:
@@ -284,7 +322,7 @@ def build_segments(
         parts.append(f"{WHITE}{elapsed}{RESET}")
 
     # 5. Tokens
-    total_out = _accumulate_fn(session_id, turn_out)
+    total_out = _output_tokens_fn(session_id, transcript_path)
     if total_in > 0 or total_out > 0:
         parts.append(f"{WHITE}↑{format_tokens(total_in)} ↓{format_tokens(total_out)}{RESET}")
 

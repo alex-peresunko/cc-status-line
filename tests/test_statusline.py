@@ -247,25 +247,79 @@ def test_session_timer_hours(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# accumulate_output_tokens
+# session_output_tokens
 # ---------------------------------------------------------------------------
 
-def test_accumulate_no_session():
-    assert sl.accumulate_output_tokens("", 500) == 500
+def _assistant(msg_id, out, **extra):
+    return json.dumps({"type": "assistant", "message": {"id": msg_id, "usage": {"output_tokens": out}}, **extra}) + "\n"
 
 
-def test_accumulate_first_turn(tmp_path):
-    sid = "acc-first"
-    result = sl.accumulate_output_tokens(sid, 300, _tmp_dir=tmp_path)
-    assert result == 300
-    assert (tmp_path / f"claude-out-tokens-{sid}").read_text() == "300"
+def test_output_tokens_no_transcript(tmp_path):
+    assert sl.session_output_tokens("s", "", _tmp_dir=tmp_path) == 0
+    assert sl.session_output_tokens("s", str(tmp_path / "missing.jsonl"), _tmp_dir=tmp_path) == 0
 
 
-def test_accumulate_subsequent_turns(tmp_path):
-    sid = "acc-sub"
-    (tmp_path / f"claude-out-tokens-{sid}").write_text("300")
-    result = sl.accumulate_output_tokens(sid, 150, _tmp_dir=tmp_path)
-    assert result == 450
+def test_output_tokens_dedupes_lines_of_one_response(tmp_path):
+    t = tmp_path / "t.jsonl"
+    t.write_text(
+        _assistant("a", 100) + _assistant("a", 100)
+        + json.dumps({"type": "user", "message": {}}) + "\n"
+        + _assistant("b", 50) + _assistant("b", 50) + _assistant("b", 50)
+    )
+    assert sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path) == 150
+
+
+def test_output_tokens_skips_sidechain(tmp_path):
+    t = tmp_path / "t.jsonl"
+    t.write_text(_assistant("a", 100) + _assistant("x", 999, isSidechain=True))
+    assert sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path) == 100
+
+
+def test_output_tokens_repeated_ticks_do_not_recount(tmp_path):
+    t = tmp_path / "t.jsonl"
+    t.write_text(_assistant("a", 100))
+    for _ in range(3):
+        assert sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path) == 100
+
+
+def test_output_tokens_incremental(tmp_path):
+    t = tmp_path / "t.jsonl"
+    t.write_text(_assistant("a", 100))
+    sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path)
+    with t.open("a") as f:
+        f.write(_assistant("a", 100) + _assistant("b", 40))
+    assert sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path) == 140
+
+
+def test_output_tokens_partial_line_read_later(tmp_path):
+    t = tmp_path / "t.jsonl"
+    line = _assistant("a", 100)
+    t.write_text(line[:20])
+    assert sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path) == 0
+    t.write_text(line)
+    assert sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path) == 100
+
+
+def test_output_tokens_restarts_when_transcript_shrinks(tmp_path):
+    t = tmp_path / "t.jsonl"
+    t.write_text(_assistant("a", 100) + _assistant("b", 100))
+    sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path)
+    t.write_text(_assistant("c", 7))
+    assert sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path) == 7
+
+
+def test_output_tokens_ignores_legacy_state(tmp_path):
+    t = tmp_path / "t.jsonl"
+    t.write_text(_assistant("a", 100))
+    (tmp_path / "claude-out-tokens-s").write_text("5304276")
+    assert sl.session_output_tokens("s", str(t), _tmp_dir=tmp_path) == 100
+
+
+def test_output_tokens_no_session_id(tmp_path):
+    t = tmp_path / "t.jsonl"
+    t.write_text(_assistant("a", 100))
+    assert sl.session_output_tokens("", str(t), _tmp_dir=tmp_path) == 100
+    assert list(tmp_path.iterdir()) == [t]
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +333,6 @@ BASE_FIELDS = dict(
     session_id="sess-123",
     transcript_path="/tmp/t.jsonl",
     total_in=50_000,
-    turn_out=1_000,
     used_pct=30.0,
     five_pct=None,
     week_pct=None,
@@ -293,7 +346,7 @@ def make_segments(**overrides):
         **fields,
         _git_info_fn=lambda cwd: ("main", ""),
         _session_timer_fn=lambda sid: "5m",
-        _accumulate_fn=lambda sid, out: out,
+        _output_tokens_fn=lambda sid, path: 1_000,
         _active_tool_fn=lambda sid: "",
         _cache_remaining_fn=lambda path, ttl: 222,
     )
@@ -333,7 +386,7 @@ def test_build_segments_git_dirty():
         **BASE_FIELDS,
         _git_info_fn=dirty_git,
         _session_timer_fn=lambda sid: "5m",
-        _accumulate_fn=lambda sid, out: out,
+        _output_tokens_fn=lambda sid, path: 1_000,
         _active_tool_fn=lambda sid: "",
         _cache_remaining_fn=lambda path, ttl: 222,
     )
@@ -343,7 +396,7 @@ def test_build_segments_git_dirty():
 
 
 def test_build_segments_tokens():
-    segs = make_segments(total_in=123_456, turn_out=1_000)
+    segs = make_segments(total_in=123_456)
     combined = joined(segs)
     assert "↑123k" in combined
 
@@ -384,7 +437,7 @@ def test_build_segments_active_tool():
         **BASE_FIELDS,
         _git_info_fn=lambda cwd: ("main", ""),
         _session_timer_fn=lambda sid: "5m",
-        _accumulate_fn=lambda sid, out: out,
+        _output_tokens_fn=lambda sid, path: 1_000,
         _active_tool_fn=lambda sid: "Bash",
         _cache_remaining_fn=lambda path, ttl: 222,
     )
@@ -397,7 +450,7 @@ def cache_segment(remaining):
         **BASE_FIELDS,
         _git_info_fn=lambda cwd: ("main", ""),
         _session_timer_fn=lambda sid: "5m",
-        _accumulate_fn=lambda sid, out: out,
+        _output_tokens_fn=lambda sid, path: 1_000,
         _active_tool_fn=lambda sid: "",
         _cache_remaining_fn=lambda path, ttl: remaining,
     )
@@ -432,7 +485,7 @@ def test_build_segments_passes_ttl_and_path():
         cache_ttl=3600,
         _git_info_fn=lambda cwd: ("main", ""),
         _session_timer_fn=lambda sid: "5m",
-        _accumulate_fn=lambda sid, out: out,
+        _output_tokens_fn=lambda sid, path: 1_000,
         _active_tool_fn=lambda sid: "",
         _cache_remaining_fn=lambda path, ttl: seen.append((path, ttl)),
     )
@@ -440,7 +493,7 @@ def test_build_segments_passes_ttl_and_path():
 
 
 def test_build_segments_no_session_id():
-    segs = make_segments(session_id="", turn_out=0, total_in=0)
+    segs = make_segments(session_id="", total_in=0)
     # Should not crash; model should still be present
     assert any("claude-sonnet-4-6" in strip_ansi(s) for s in segs)
 
