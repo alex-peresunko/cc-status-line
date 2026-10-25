@@ -27,9 +27,10 @@ def test_format_tokens_k():
     assert sl.format_tokens(999_999) == "999k"
 
 def test_format_tokens_M():
-    assert sl.format_tokens(1_000_000) == "1.0M"
+    assert sl.format_tokens(1_000_000) == "1M"
+    assert sl.format_tokens(2_400_000) == "2.4M"
     assert sl.format_tokens(1_400_000) == "1.4M"
-    assert sl.format_tokens(10_000_000) == "10.0M"
+    assert sl.format_tokens(10_000_000) == "10M"
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +114,18 @@ def test_cache_remaining_reads_only_tail(tmp_path):
     assert remaining(write_transcript(tmp_path, *lines)) is None
     lines = [filler] * 400 + [entry("assistant", 100)]
     assert remaining(write_transcript(tmp_path, *lines)) == 200
+
+
+def test_cache_left_prefers_expires_at(tmp_path):
+    path = write_transcript(tmp_path, entry("assistant", 100))
+    assert sl.cache_left(NOW + 3000, path, 300, _now=lambda: NOW) == 3000
+    assert sl.cache_left(NOW - 5, path, 300, _now=lambda: NOW) == 0
+
+
+def test_cache_left_falls_back_to_transcript(tmp_path):
+    path = write_transcript(tmp_path, entry("assistant", 100))
+    assert sl.cache_left(None, path, 300, _now=lambda: NOW) == 200
+    assert sl.cache_left(None, "", 300, _now=lambda: NOW) is None
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +340,9 @@ BASE_FIELDS = dict(
     session_id="sess-123",
     transcript_path="/tmp/t.jsonl",
     total_in=123_456,
+    ctx_size=1_000_000,
+    cache_expires_at=None,
+    cache_misses=0,
     used_pct=30.0,
     five_pct=None,
     week_pct=None,
@@ -340,8 +356,7 @@ def make_segments(**overrides):
         **fields,
         _git_branch_fn=lambda cwd: "main",
         _usage_fn=lambda sid, path: USAGE,
-        _active_tool_fn=lambda sid: "",
-        _cache_remaining_fn=lambda path, ttl: 222,
+        _cache_left_fn=lambda expires_at, path, ttl: 222,
     )
 
 
@@ -368,8 +383,7 @@ def test_build_segments_project_without_git():
         **BASE_FIELDS,
         _git_branch_fn=lambda cwd: "",
         _usage_fn=lambda sid, path: USAGE,
-        _active_tool_fn=lambda sid: "",
-        _cache_remaining_fn=lambda path, ttl: 222,
+        _cache_left_fn=lambda expires_at, path, ttl: 222,
     )
     assert strip_ansi(segs[1]) == "myproject"
 
@@ -383,14 +397,14 @@ def test_build_segments_tokens_absent_without_usage():
         **BASE_FIELDS,
         _git_branch_fn=lambda cwd: "main",
         _usage_fn=lambda sid, path: dict.fromkeys(sl.USAGE_KEYS, 0),
-        _active_tool_fn=lambda sid: "",
-        _cache_remaining_fn=lambda path, ttl: None,
+        _cache_left_fn=lambda expires_at, path, ttl: None,
     )
     assert "↓" not in joined(segs)
 
 
 def test_build_segments_ctx_bar_shows_context_size():
-    assert "███░░░░░░░ 123k (30%) |" in joined(make_segments())
+    assert "███░░░░░░░ 123k/1M (30%) |" in joined(make_segments())
+    assert "███░░░░░░░ 123k (30%) |" in joined(make_segments(ctx_size=0))
     assert "███░░░░░░░ 30% |" in joined(make_segments(total_in=0))
 
 
@@ -419,22 +433,9 @@ def test_build_segments_rate_limits():
     assert "7d:20%" in combined
 
 
-def test_build_segments_effort():
-    segs = make_segments(effort="high")
-    combined = joined(segs)
-    assert "🧠 high" in combined
-
-
-def test_build_segments_active_tool():
-    segs = sl.build_segments(
-        **BASE_FIELDS,
-        _git_branch_fn=lambda cwd: "main",
-        _usage_fn=lambda sid, path: USAGE,
-        _active_tool_fn=lambda sid: "Bash",
-        _cache_remaining_fn=lambda path, ttl: 222,
-    )
-    combined = joined(segs)
-    assert "⚙ Bash" in combined
+def test_build_segments_model_with_effort():
+    assert [strip_ansi(x) for x in make_segments(effort="high")[:2]] == ["🧠 claude-sonnet-4-6 high", "myproject:main"]
+    assert strip_ansi(make_segments()[0]) == "🧠 claude-sonnet-4-6"
 
 
 def cache_segment(remaining):
@@ -442,8 +443,7 @@ def cache_segment(remaining):
         **BASE_FIELDS,
         _git_branch_fn=lambda cwd: "main",
         _usage_fn=lambda sid, path: USAGE,
-        _active_tool_fn=lambda sid: "",
-        _cache_remaining_fn=lambda path, ttl: remaining,
+        _cache_left_fn=lambda expires_at, path, ttl: remaining,
     )
     return next((s for s in segs if "⏳" in s or "⌛" in s), None)
 
@@ -469,6 +469,12 @@ def test_build_segments_cache_absent():
     assert cache_segment(None) is None
 
 
+def test_build_segments_cache_misses():
+    assert "⚠" not in joined(make_segments())
+    assert "⏳ 3:42 | ⚠ 1 miss" in joined(make_segments(cache_misses=1))
+    assert "⚠ 3 misses" in joined(make_segments(cache_misses=3))
+
+
 def test_build_segments_passes_ttl_and_path():
     seen = []
     sl.build_segments(
@@ -476,10 +482,9 @@ def test_build_segments_passes_ttl_and_path():
         cache_ttl=3600,
         _git_branch_fn=lambda cwd: "main",
         _usage_fn=lambda sid, path: USAGE,
-        _active_tool_fn=lambda sid: "",
-        _cache_remaining_fn=lambda path, ttl: seen.append((path, ttl)),
+        _cache_left_fn=lambda expires_at, path, ttl: seen.append((expires_at, path, ttl)),
     )
-    assert seen == [("/tmp/t.jsonl", 3600)]
+    assert seen == [(None, "/tmp/t.jsonl", 3600)]
 
 
 def test_build_segments_no_session_id():
@@ -495,15 +500,15 @@ def test_build_segments_no_session_id():
 def test_build_context_maps_fields(tmp_path):
     seen = []
     ctx = sl.build_context(
-        {**BASE_FIELDS, "session_id": "s1"},
+        {**BASE_FIELDS, "session_id": "s1", "cache_expires_at": 99},
         cache_ttl=3600,
         env={"TMUX_PANE": "%2"},
-        _cache_remaining_fn=lambda path, ttl: seen.append((path, ttl)) or 77,
+        _cache_left_fn=lambda expires_at, path, ttl: seen.append((expires_at, path, ttl)) or 77,
         _tool_in_flight_fn=lambda path: path == "/tmp/t.jsonl",
         _background_agents_fn=lambda path: path != "/tmp/t.jsonl",
         _now=lambda: 42.0,
     )
-    assert seen == [("/tmp/t.jsonl", 3600)]
+    assert seen == [(99, "/tmp/t.jsonl", 3600)]
     assert (ctx.session_id, ctx.total_in, ctx.cache_remaining, ctx.tool_in_flight) == ("s1", 123_456, 77, True)
     assert ctx.background_agents is False
     assert ctx.env == {"TMUX_PANE": "%2"}
@@ -513,6 +518,17 @@ def test_build_context_maps_fields(tmp_path):
 # ---------------------------------------------------------------------------
 # parse_input
 # ---------------------------------------------------------------------------
+
+def test_parse_input_prompt_cache_and_window_size():
+    data = {"prompt_cache": {"expires_at": 1792961243, "misses": 2},
+            "context_window": {"context_window_size": 200000}}
+    result = sl.parse_input(data)
+    assert (result["cache_expires_at"], result["cache_misses"], result["ctx_size"]) == (1792961243, 2, 200000)
+    expiries = {"misses": 4, "miss_causes": {"ttl_expired_1h": 2, "cache_scope_or_ttl_changed": 1}}
+    assert sl.parse_input({"prompt_cache": expiries})["cache_misses"] == 2
+    empty = sl.parse_input({})
+    assert (empty["cache_expires_at"], empty["cache_misses"], empty["ctx_size"]) == (None, 0, 0)
+
 
 def test_parse_input_project_is_start_folder():
     workspace = {"current_dir": "/home/u/repo/src", "project_dir": "/home/u/repo/"}

@@ -8,7 +8,7 @@ ctx_crit  = 80
 bar_width = 10
 
 [cache]
-ttl = 300            # seconds; set 3600 if your main conversation uses the 1h prompt cache TTL
+ttl = 300            # seconds; used only when Claude Code sends no prompt_cache.expires_at
 
 # Types /compact into this session's terminal (tmux or iTerm2, auto-detected) when the context
 # is large and the prompt cache is about to expire. Compacting while the cache is warm is far

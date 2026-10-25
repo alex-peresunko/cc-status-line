@@ -29,20 +29,35 @@ def commands(path, event):
     return [h["command"] for w in json.loads(path.read_text())["hooks"][event] for h in w["hooks"]]
 
 
-def hook(event):
-    return next(cmd for ev, cmd in ps.HOOKS if ev == event)
+def hook(event, hooks=None):
+    return next(cmd for ev, cmd in (hooks or ps.HOOKS) if ev == event)
+
+
+def retired(event):
+    return hook(event, ps.RETIRED_HOOKS)
 
 
 def test_legacy_form_is_what_earlier_installs_wrote():
-    assert ps._legacy(hook("PostToolUse")) == OLD_POST_TOOL_USE
+    assert ps._legacy(retired("PostToolUse")) == OLD_POST_TOOL_USE
 
 
 def test_install_migrates_legacy_hooks_in_place(settings):
-    other = {"hooks": [{"type": "command", "command": "keep-me"}]}
-    legacy = {"hooks": [{"type": "command", "command": OLD_POST_TOOL_USE}]}
-    settings.write_text(json.dumps({"hooks": {"PostToolUse": [other, legacy]}}))
+    legacy = {"hooks": [{"type": "command", "command": ps._legacy(hook("UserPromptSubmit"))}]}
+    settings.write_text(json.dumps({"hooks": {"UserPromptSubmit": [legacy]}}))
     ps.install()
-    assert commands(settings, "PostToolUse") == ["keep-me", hook("PostToolUse")]
+    assert commands(settings, "UserPromptSubmit") == [hook("UserPromptSubmit")]
+
+
+def test_install_removes_retired_hooks_only(settings):
+    other = {"hooks": [{"type": "command", "command": "keep-me"}]}
+    settings.write_text(json.dumps({"hooks": {
+        "PreToolUse": [{"hooks": [{"type": "command", "command": retired("PreToolUse")}]}],
+        "PostToolUse": [other, {"hooks": [{"type": "command", "command": OLD_POST_TOOL_USE}]}],
+    }}))
+    ps.install()
+    hooks = json.loads(settings.read_text())["hooks"]
+    assert "PreToolUse" not in hooks
+    assert commands(settings, "PostToolUse") == ["keep-me"]
 
 
 def test_install_is_idempotent(settings):
@@ -58,25 +73,23 @@ def test_uninstall_removes_new_and_legacy_hooks_only(settings):
         "PostToolUse": [
             {"hooks": [{"type": "command", "command": "keep-me"}]},
             {"hooks": [{"type": "command", "command": OLD_POST_TOOL_USE}]},
-            {"hooks": [{"type": "command", "command": hook("PostToolUse")}]},
+            {"hooks": [{"type": "command", "command": retired("PostToolUse")}]},
         ],
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": hook("UserPromptSubmit")}]}],
     }}))
     ps.uninstall()
     assert commands(settings, "PostToolUse") == ["keep-me"]
+    assert "UserPromptSubmit" not in json.loads(settings.read_text())["hooks"]
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="hooks need jq")
-def test_tool_file_hooks_survive_json_escapes():
+def test_clear_hook_survives_json_escapes():
     sid = f"hooktest-{uuid.uuid4()}"
-    tool_file = pathlib.Path(f"/tmp/claude-tool-{sid}")
-
-    def run(event, payload):
-        subprocess.run(["sh", "-c", hook(event)], input=json.dumps(payload), text=True, check=True)
-
+    state_file = pathlib.Path(f"/tmp/claude-out-tokens-{sid}")
+    state_file.write_text("{}")
+    payload = {"session_id": sid, "prompt": "/clear", "transcript": "line1\nline2\ttabbed"}
     try:
-        run("PreToolUse", {"session_id": sid, "tool_name": "Bash", "tool_input": {"command": "echo a\necho b"}})
-        assert tool_file.read_text() == "Bash"
-        run("PostToolUse", {"session_id": sid, "tool_response": "line1\nline2\ttabbed"})
-        assert not tool_file.exists()
+        subprocess.run(["sh", "-c", hook("UserPromptSubmit")], input=json.dumps(payload), text=True, check=True)
+        assert not state_file.exists()
     finally:
-        tool_file.unlink(missing_ok=True)
+        state_file.unlink(missing_ok=True)

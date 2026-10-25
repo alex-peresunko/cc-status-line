@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Claude Code status line: model | project:branch | tokens | ctx% | cache"""
+"""Claude Code status line: model effort | project:branch | tokens | ctx% | cache"""
 
 import json
 import os
@@ -31,13 +31,12 @@ TOKENS  = "\033[38;5;253m"
 LABEL   = "\033[38;5;243m"
 RATE    = "\033[38;5;110m"
 EFFORT  = "\033[38;5;80m"
-TOOL    = "\033[38;5;222m"
 SEP     = "\033[38;5;238m"
 RESET   = "\033[0m"
 
 def format_tokens(n: int) -> str:
     if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M"
+        return f"{n / 1_000_000:.1f}".removesuffix(".0") + "M"
     if n >= 1_000:
         return f"{n // 1_000}k"
     return str(n)
@@ -134,6 +133,14 @@ def cache_remaining(transcript_path: str, ttl: int = CACHE_TTL, _now=time.time) 
     return None
 
 
+def cache_left(cache_expires_at, transcript_path: str, ttl: int = CACHE_TTL, _now=time.time) -> int | None:
+    """Seconds until the prompt cache expires, from Claude Code's `prompt_cache.expires_at` when sent,
+    else estimated from the transcript with `ttl`. None if neither is known."""
+    if cache_expires_at is not None:
+        return max(0, int(cache_expires_at - _now()))
+    return cache_remaining(transcript_path, ttl, _now)
+
+
 def format_countdown(seconds: int) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
@@ -204,18 +211,6 @@ def session_usage(session_id: str, transcript_path: str, _tmp_dir: pathlib.Path 
     return totals
 
 
-def active_tool(session_id: str, _tmp_dir: pathlib.Path = _TMP) -> str:
-    if not session_id:
-        return ""
-    tool_file = _tmp_dir / f"claude-tool-{session_id}"
-    if tool_file.exists():
-        try:
-            return tool_file.read_text().strip()
-        except OSError:
-            pass
-    return ""
-
-
 def git_branch(cwd: str) -> str:
     """Current branch name; empty if `cwd` is not in a git repo."""
     if not cwd:
@@ -238,7 +233,15 @@ def parse_input(data: dict) -> dict:
 
     ctx        = data.get("context_window", {})
     total_in   = int(ctx.get("total_input_tokens") or 0)
+    ctx_size   = int(ctx.get("context_window_size") or 0)
     used_pct   = ctx.get("used_percentage")
+
+    pc         = data.get("prompt_cache") or {}
+    cache_expires_at = pc.get("expires_at")
+    causes     = pc.get("miss_causes") if isinstance(pc.get("miss_causes"), dict) else {}
+    # A rebuild after the TTL runs out is counted as a miss with a `ttl_expired_*` cause.
+    expiries   = sum(int(n or 0) for cause, n in causes.items() if cause.startswith("ttl_expired"))
+    cache_misses = max(0, int(pc.get("misses") or 0) - expiries)
 
     rl         = data.get("rate_limits", {})
     five_pct   = (rl.get("five_hour") or {}).get("used_percentage")
@@ -249,8 +252,8 @@ def parse_input(data: dict) -> dict:
 
     return dict(
         model=model, cwd=cwd, project=project,
-        session_id=session_id, transcript_path=transcript_path, total_in=total_in,
-        used_pct=used_pct, five_pct=five_pct, week_pct=week_pct, effort=effort,
+        session_id=session_id, transcript_path=transcript_path, total_in=total_in, ctx_size=ctx_size,
+        cache_expires_at=cache_expires_at, cache_misses=cache_misses, used_pct=used_pct, five_pct=five_pct, week_pct=week_pct, effort=effort,
     )
 
 
@@ -261,6 +264,9 @@ def build_segments(
     session_id: str,
     transcript_path: str,
     total_in: int,
+    ctx_size: int,
+    cache_expires_at,
+    cache_misses: int,
     used_pct,
     five_pct,
     week_pct,
@@ -272,13 +278,13 @@ def build_segments(
     cache_ttl: int = CACHE_TTL,
     _git_branch_fn=git_branch,
     _usage_fn=session_usage,
-    _active_tool_fn=active_tool,
-    _cache_remaining_fn=cache_remaining,
+    _cache_left_fn=cache_left,
 ) -> list[str]:
     parts = []
 
-    # 1. Model
-    parts.append(f"{MODEL}{model}{RESET}")
+    # 1. Model and effort
+    level = f" {EFFORT}{effort}{RESET}" if effort else ""
+    parts.append(f"🧠 {MODEL}{model}{RESET}{level}")
 
     # 2. Project and branch
     branch = _git_branch_fn(cwd)
@@ -307,11 +313,12 @@ def build_segments(
             color = GREEN
         filled = min(round(used_int / 100 * bar_width), bar_width)
         bar = "█" * filled + "░" * (bar_width - filled)
-        fill = f"{format_tokens(total_in)} ({used_int}%)" if total_in else f"{used_int}%"
+        size = f"/{format_tokens(ctx_size)}" if ctx_size else ""
+        fill = f"{format_tokens(total_in)}{size} ({used_int}%)" if total_in else f"{used_int}%"
         parts.append(f"{color}{bar} {fill}{RESET}")
 
     # 5. Cache expiry countdown
-    remaining = _cache_remaining_fn(transcript_path, cache_ttl)
+    remaining = _cache_left_fn(cache_expires_at, transcript_path, cache_ttl)
     if remaining is not None:
         if remaining == 0:
             parts.append(f"{DIM}⌛ expired{RESET}")
@@ -319,7 +326,11 @@ def build_segments(
             color = RED if remaining < 30 else YELLOW if remaining <= 120 else GREEN
             parts.append(f"{color}⏳ {format_countdown(remaining)}{RESET}")
 
-    # 6. Rate limits
+    # 6. Cache misses
+    if cache_misses > 0:
+        parts.append(f"{YELLOW}⚠ {cache_misses} miss{'es' if cache_misses > 1 else ''}{RESET}")
+
+    # 7. Rate limits
     rate_parts = []
     if five_pct is not None:
         rate_parts.append(f"5h:{round(float(five_pct))}%")
@@ -327,15 +338,6 @@ def build_segments(
         rate_parts.append(f"7d:{round(float(week_pct))}%")
     if rate_parts:
         parts.append(f"{RATE}{' '.join(rate_parts)}{RESET}")
-
-    # 7. Effort
-    if effort:
-        parts.append(f"{EFFORT}🧠 {effort}{RESET}")
-
-    # 8. Active tool
-    tool = _active_tool_fn(session_id)
-    if tool:
-        parts.append(f"{TOOL}⚙ {tool}{RESET}")
 
     return parts
 
@@ -350,7 +352,7 @@ def build_context(
     cache_ttl: int,
     env=os.environ,
     *,
-    _cache_remaining_fn=cache_remaining,
+    _cache_left_fn=cache_left,
     _tool_in_flight_fn=tool_in_flight,
     _background_agents_fn=background_agents_running,
     _now=time.time,
@@ -358,7 +360,7 @@ def build_context(
     return Context(
         session_id=fields["session_id"],
         total_in=fields["total_in"],
-        cache_remaining=_cache_remaining_fn(fields["transcript_path"], cache_ttl),
+        cache_remaining=_cache_left_fn(fields["cache_expires_at"], fields["transcript_path"], cache_ttl),
         tool_in_flight=_tool_in_flight_fn(fields["transcript_path"]),
         background_agents=_background_agents_fn(fields["transcript_path"]),
         env=env,

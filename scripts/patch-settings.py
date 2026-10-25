@@ -29,6 +29,10 @@ HOOKS = [
         f'prompt={_jq("prompt")}; '
         '[ "$prompt" = "/clear" ] && [ -n "$sid" ] && rm -f "/tmp/claude-out-tokens-${sid}" || true',
     ),
+]
+
+# Hooks earlier installs added; install and uninstall both remove them.
+RETIRED_HOOKS = [
     (
         "PreToolUse",
         'input=$(cat); '
@@ -61,6 +65,22 @@ def _existing_cmds(data, event):
     }
 
 
+def _remove(data, event, cmd):
+    """Drop single-hook entries for `cmd` (current or legacy form) under `event`, and the event if left empty."""
+    hooks = data.get("hooks", {})
+    if event not in hooks:
+        return
+    hooks[event] = [
+        w for w in hooks[event]
+        if not (
+            len(w.get("hooks", [])) == 1
+            and w["hooks"][0].get("command") in (cmd, _legacy(cmd))
+        )
+    ]
+    if not hooks[event]:
+        del hooks[event]
+
+
 def install():
     data = load()
     data["statusLine"] = STATUS_LINE
@@ -74,6 +94,8 @@ def install():
                     h["command"] = cmd
         if cmd not in _existing_cmds(data, event):
             data["hooks"][event].append({"hooks": [{"type": "command", "command": cmd}]})
+    for event, cmd in RETIRED_HOOKS:
+        _remove(data, event, cmd)
 
     save(data)
     print("settings.json patched (install).")
@@ -83,15 +105,8 @@ def uninstall():
     data = load()
     data.pop("statusLine", None)
 
-    for event, cmd in HOOKS:
-        entries = data.get("hooks", {}).get(event, [])
-        data["hooks"][event] = [
-            w for w in entries
-            if not (
-                len(w.get("hooks", [])) == 1
-                and w["hooks"][0].get("command") in (cmd, _legacy(cmd))
-            )
-        ]
+    for event, cmd in HOOKS + RETIRED_HOOKS:
+        _remove(data, event, cmd)
 
     save(data)
     print("settings.json patched (uninstall).")
