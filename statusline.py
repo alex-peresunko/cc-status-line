@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Claude Code status line: model | location | git | tokens | ctx% | cache"""
+"""Claude Code status line: model | branch | git | tokens | ctx% | cache"""
 
 import json
 import os
@@ -153,15 +153,19 @@ def session_timer(session_id: str, _tmp_dir: pathlib.Path = _TMP) -> str:
     return f"{elapsed // 60}m"
 
 
-def session_output_tokens(session_id: str, transcript_path: str, _tmp_dir: pathlib.Path = _TMP) -> int:
-    """Output tokens of the main thread's API responses in the transcript.
+USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def session_usage(session_id: str, transcript_path: str, _tmp_dir: pathlib.Path = _TMP) -> dict[str, int]:
+    """Session totals of each `USAGE_KEYS` field over the main thread's API responses in the transcript.
 
     The transcript is read incrementally: the state file keeps the offset of the first unread line.
     A response is written as several consecutive lines sharing a message id and usage, so a repeated id
     adds only the difference from what was already counted for it.
     """
+    empty = dict.fromkeys(USAGE_KEYS, 0)
     if not transcript_path:
-        return 0
+        return empty
     state_file = _tmp_dir / f"claude-out-tokens-{session_id}" if session_id else None
     state = {}
     if state_file and state_file.exists():
@@ -169,21 +173,22 @@ def session_output_tokens(session_id: str, transcript_path: str, _tmp_dir: pathl
             state = json.loads(state_file.read_text())
         except (ValueError, OSError):
             state = {}
-        if not isinstance(state, dict) or state.get("path") != transcript_path:
+        if (not isinstance(state, dict) or state.get("path") != transcript_path
+                or not isinstance(state.get("totals"), dict) or not isinstance(state.get("last_usage"), dict)):
             state = {}
     offset = int(state.get("offset") or 0)
-    total = int(state.get("total") or 0)
+    totals = {k: int(state.get("totals", {}).get(k) or 0) for k in USAGE_KEYS}
     last_id = state.get("last_id")
-    last_out = int(state.get("last_out") or 0)
+    last_usage = {k: int(state.get("last_usage", {}).get(k) or 0) for k in USAGE_KEYS}
     try:
         with open(transcript_path, "rb") as f:
             f.seek(0, os.SEEK_END)
             if f.tell() < offset:  # transcript replaced or truncated
-                offset, total, last_id, last_out = 0, 0, None, 0
+                offset, totals, last_id, last_usage = 0, dict(empty), None, dict(empty)
             f.seek(offset)
             chunk = f.read()
     except OSError:
-        return total
+        return totals
     complete = chunk[: chunk.rfind(b"\n") + 1]  # a trailing partial line is read on a later tick
     for line in complete.splitlines():
         try:
@@ -193,22 +198,22 @@ def session_output_tokens(session_id: str, transcript_path: str, _tmp_dir: pathl
         if not isinstance(entry, dict) or entry.get("type") != "assistant" or entry.get("isSidechain"):
             continue
         message = entry.get("message") or {}
-        out = int((message.get("usage") or {}).get("output_tokens") or 0)
+        raw = message.get("usage") or {}
+        usage = {k: int(raw.get(k) or 0) for k in USAGE_KEYS}
         msg_id = message.get("id")
-        if msg_id is not None and msg_id == last_id:
-            total += out - last_out
-        else:
-            total += out
-        last_id, last_out = msg_id, out
+        repeated = msg_id is not None and msg_id == last_id
+        for k in USAGE_KEYS:
+            totals[k] += usage[k] - (last_usage[k] if repeated else 0)
+        last_id, last_usage = msg_id, usage
     if state_file:
         try:
             state_file.write_text(json.dumps({
                 "path": transcript_path, "offset": offset + len(complete),
-                "total": total, "last_id": last_id, "last_out": last_out,
+                "totals": totals, "last_id": last_id, "last_usage": last_usage,
             }))
         except OSError:
             pass
-    return total
+    return totals
 
 
 def active_tool(session_id: str, _tmp_dir: pathlib.Path = _TMP) -> str:
@@ -245,8 +250,6 @@ def parse_input(data: dict) -> dict:
     model        = data.get("model", {}).get("display_name") or "Claude"
 
     cwd        = data.get("workspace", {}).get("current_dir") or ""
-    repo_info  = data.get("workspace", {}).get("repo")
-    repo       = f"{repo_info['owner']}/{repo_info['name']}" if repo_info else ""
     session_id = data.get("session_id") or ""
     transcript_path = data.get("transcript_path") or ""
 
@@ -262,7 +265,7 @@ def parse_input(data: dict) -> dict:
     effort     = (effort_raw.get("level") if isinstance(effort_raw, dict) else effort_raw) or ""
 
     return dict(
-        model=model, cwd=cwd, repo=repo,
+        model=model, cwd=cwd,
         session_id=session_id, transcript_path=transcript_path, total_in=total_in,
         used_pct=used_pct, five_pct=five_pct, week_pct=week_pct, effort=effort,
     )
@@ -271,10 +274,8 @@ def parse_input(data: dict) -> dict:
 def build_segments(
     model: str,
     cwd: str,
-    repo: str,
     session_id: str,
     transcript_path: str,
-    total_in: int,
     used_pct,
     five_pct,
     week_pct,
@@ -286,7 +287,7 @@ def build_segments(
     cache_ttl: int = CACHE_TTL,
     _git_info_fn=git_info,
     _session_timer_fn=session_timer,
-    _output_tokens_fn=session_output_tokens,
+    _usage_fn=session_usage,
     _active_tool_fn=active_tool,
     _cache_remaining_fn=cache_remaining,
 ) -> list[str]:
@@ -295,13 +296,10 @@ def build_segments(
     # 1. Model
     parts.append(f"{CYAN}{model}{RESET}")
 
-    # 2. Location + branch
+    # 2. Branch
     branch, porcelain = _git_info_fn(cwd)
-    location = repo or (os.path.basename(cwd) if cwd else "")
     if branch:
-        parts.append(f"{BLUE}{location}{DIM}:{CYAN}{branch}{RESET}")
-    elif location:
-        parts.append(f"{BLUE}{location}{RESET}")
+        parts.append(f"{CYAN}{branch}{RESET}")
 
     # 3. Git state
     if porcelain:
@@ -322,9 +320,13 @@ def build_segments(
         parts.append(f"{WHITE}{elapsed}{RESET}")
 
     # 5. Tokens
-    total_out = _output_tokens_fn(session_id, transcript_path)
-    if total_in > 0 or total_out > 0:
-        parts.append(f"{WHITE}↑{format_tokens(total_in)} ↓{format_tokens(total_out)}{RESET}")
+    usage = _usage_fn(session_id, transcript_path)
+    if any(usage.values()):
+        parts.append(
+            f"{WHITE}↑{format_tokens(usage['input_tokens'])} ↓{format_tokens(usage['output_tokens'])} "
+            f"{DIM}R{WHITE}{format_tokens(usage['cache_read_input_tokens'])} "
+            f"{DIM}W{WHITE}{format_tokens(usage['cache_creation_input_tokens'])}{RESET}"
+        )
 
     # 6. Context bar
     if used_pct is not None:
@@ -406,7 +408,7 @@ def main() -> None:
 
     fields = parse_input(data)
     segments = build_segments(
-        **fields,
+        **{k: v for k, v in fields.items() if k != "total_in"},
         ctx_warn=config.display.ctx_warn,
         ctx_crit=config.display.ctx_crit,
         bar_width=config.display.bar_width,
