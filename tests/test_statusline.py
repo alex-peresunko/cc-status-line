@@ -116,7 +116,7 @@ def test_cache_remaining_reads_only_tail(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# session_timer
+# tool_in_flight / background_agents_running
 # ---------------------------------------------------------------------------
 
 def tool_use(*ids, **extra):
@@ -219,33 +219,6 @@ def test_background_agents_unreadable_or_empty(tmp_path):
     assert not agents_running(tmp_path, "not json", "[1, 2]", "")
 
 
-def test_session_timer_empty_id():
-    assert sl.session_timer("") == ""
-
-
-def test_session_timer_creates_file(tmp_path):
-    sid = "test-session-abc"
-    result = sl.session_timer(sid, _tmp_dir=tmp_path)
-    assert result == "0m"
-    assert (tmp_path / f"claude-start-{sid}").exists()
-
-
-def test_session_timer_minutes(tmp_path):
-    import time
-    sid = "sess-minutes"
-    (tmp_path / f"claude-start-{sid}").write_text(str(int(time.time()) - 125))
-    result = sl.session_timer(sid, _tmp_dir=tmp_path)
-    assert result == "2m"
-
-
-def test_session_timer_hours(tmp_path):
-    import time
-    sid = "sess-hours"
-    (tmp_path / f"claude-start-{sid}").write_text(str(int(time.time()) - 3720))
-    result = sl.session_timer(sid, _tmp_dir=tmp_path)
-    assert result == "1h 2m"
-
-
 # ---------------------------------------------------------------------------
 # session_usage
 # ---------------------------------------------------------------------------
@@ -270,7 +243,7 @@ def test_usage_sums_each_field(tmp_path):
     t.write_text(_assistant("a", 10, cache_read=1000, cache_write=200, inp=3)
                  + _assistant("b", 20, cache_read=1200, cache_write=50, inp=2))
     assert sl.session_usage("s", str(t), _tmp_dir=tmp_path) == {
-        "input_tokens": 5, "output_tokens": 30,
+        "output_tokens": 30,
         "cache_read_input_tokens": 2200, "cache_creation_input_tokens": 250,
     }
 
@@ -344,7 +317,7 @@ def test_usage_no_session_id(tmp_path):
 # build_segments (integration-style, injecting stubs)
 # ---------------------------------------------------------------------------
 
-USAGE = {"input_tokens": 1_234, "output_tokens": 56_789,
+USAGE = {"output_tokens": 56_789,
          "cache_read_input_tokens": 11_200_000, "cache_creation_input_tokens": 300_000}
 
 BASE_FIELDS = dict(
@@ -363,8 +336,7 @@ def make_segments(**overrides):
     fields = {**BASE_FIELDS, **overrides}
     return sl.build_segments(
         **fields,
-        _git_info_fn=lambda cwd: ("main", ""),
-        _session_timer_fn=lambda sid: "5m",
+        _git_branch_fn=lambda cwd: "main",
         _usage_fn=lambda sid, path: USAGE,
         _active_tool_fn=lambda sid: "",
         _cache_remaining_fn=lambda path, ttl: 222,
@@ -391,42 +363,19 @@ def test_build_segments_branch_without_location():
     assert "myproject" not in joined(segs)
 
 
-def test_build_segments_git_clean():
-    segs = make_segments()
-    combined = joined(segs)
-    assert "✓" in combined
-
-
-def test_build_segments_git_dirty():
-    def dirty_git(cwd):
-        return "main", " M file.py\n?? new.py\n"
-    segs = sl.build_segments(
-        **BASE_FIELDS,
-        _git_info_fn=dirty_git,
-        _session_timer_fn=lambda sid: "5m",
-        _usage_fn=lambda sid, path: USAGE,
-        _active_tool_fn=lambda sid: "",
-        _cache_remaining_fn=lambda path, ttl: 222,
-    )
-    combined = joined(segs)
-    assert "~1" in combined
-    assert "?1" in combined
-
-
 def test_build_segments_tokens():
-    assert "↑1k ↓56k R11.2M W300k" in joined(make_segments())
+    assert "↓56k R11.2M W300k" in joined(make_segments())
 
 
 def test_build_segments_tokens_absent_without_usage():
     segs = sl.build_segments(
         **BASE_FIELDS,
-        _git_info_fn=lambda cwd: ("main", ""),
-        _session_timer_fn=lambda sid: "5m",
+        _git_branch_fn=lambda cwd: "main",
         _usage_fn=lambda sid, path: dict.fromkeys(sl.USAGE_KEYS, 0),
         _active_tool_fn=lambda sid: "",
         _cache_remaining_fn=lambda path, ttl: None,
     )
-    assert "↑" not in joined(segs)
+    assert "↓" not in joined(segs)
 
 
 def test_build_segments_ctx_bar_green():
@@ -463,8 +412,7 @@ def test_build_segments_effort():
 def test_build_segments_active_tool():
     segs = sl.build_segments(
         **BASE_FIELDS,
-        _git_info_fn=lambda cwd: ("main", ""),
-        _session_timer_fn=lambda sid: "5m",
+        _git_branch_fn=lambda cwd: "main",
         _usage_fn=lambda sid, path: USAGE,
         _active_tool_fn=lambda sid: "Bash",
         _cache_remaining_fn=lambda path, ttl: 222,
@@ -476,17 +424,16 @@ def test_build_segments_active_tool():
 def cache_segment(remaining):
     segs = sl.build_segments(
         **BASE_FIELDS,
-        _git_info_fn=lambda cwd: ("main", ""),
-        _session_timer_fn=lambda sid: "5m",
+        _git_branch_fn=lambda cwd: "main",
         _usage_fn=lambda sid, path: USAGE,
         _active_tool_fn=lambda sid: "",
         _cache_remaining_fn=lambda path, ttl: remaining,
     )
-    return next((s for s in segs if "cache" in s), None)
+    return next((s for s in segs if "⏳" in s or "⌛" in s), None)
 
 
 def test_build_segments_cache_countdown():
-    assert strip_ansi(cache_segment(222)) == "cache 3:42"
+    assert strip_ansi(cache_segment(222)) == "⏳ 3:42"
 
 
 def test_build_segments_cache_colors():
@@ -498,7 +445,7 @@ def test_build_segments_cache_colors():
 
 def test_build_segments_cache_expired():
     seg = cache_segment(0)
-    assert strip_ansi(seg) == "cache expired"
+    assert strip_ansi(seg) == "⌛ expired"
     assert sl.DIM in seg
 
 
@@ -511,8 +458,7 @@ def test_build_segments_passes_ttl_and_path():
     sl.build_segments(
         **BASE_FIELDS,
         cache_ttl=3600,
-        _git_info_fn=lambda cwd: ("main", ""),
-        _session_timer_fn=lambda sid: "5m",
+        _git_branch_fn=lambda cwd: "main",
         _usage_fn=lambda sid, path: USAGE,
         _active_tool_fn=lambda sid: "",
         _cache_remaining_fn=lambda path, ttl: seen.append((path, ttl)),

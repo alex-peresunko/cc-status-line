@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Claude Code status line: model | branch | git | tokens | ctx% | cache"""
+"""Claude Code status line: model | branch | tokens | ctx% | cache"""
 
 import json
 import os
@@ -134,26 +134,7 @@ def format_countdown(seconds: int) -> str:
 _TMP = pathlib.Path("/tmp")
 
 
-def session_timer(session_id: str, _tmp_dir: pathlib.Path = _TMP) -> str:
-    if not session_id:
-        return ""
-    start_file = _tmp_dir / f"claude-start-{session_id}"
-    now = int(time.time())
-    if not start_file.exists():
-        start_file.write_text(str(now))
-        session_start = now
-    else:
-        try:
-            session_start = int(start_file.read_text().strip())
-        except (ValueError, OSError):
-            session_start = now
-    elapsed = now - session_start
-    if elapsed >= 3600:
-        return f"{elapsed // 3600}h {(elapsed % 3600) // 60}m"
-    return f"{elapsed // 60}m"
-
-
-USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+USAGE_KEYS = ("output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 
 
 def session_usage(session_id: str, transcript_path: str, _tmp_dir: pathlib.Path = _TMP) -> dict[str, int]:
@@ -228,22 +209,15 @@ def active_tool(session_id: str, _tmp_dir: pathlib.Path = _TMP) -> str:
     return ""
 
 
-def git_info(cwd: str) -> tuple[str, str]:
-    """Returns (branch, porcelain_output). Empty strings if not a git repo."""
+def git_branch(cwd: str) -> str:
+    """Current branch name; empty if `cwd` is not in a git repo."""
     if not cwd:
-        return "", ""
+        return ""
     result = subprocess.run(
         ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
         capture_output=True, text=True
     )
-    branch = result.stdout.strip() if result.returncode == 0 else ""
-    if not branch:
-        return "", ""
-    porcelain = subprocess.run(
-        ["git", "-C", cwd, "status", "--porcelain"],
-        capture_output=True, text=True
-    )
-    return branch, porcelain.stdout if porcelain.returncode == 0 else ""
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def parse_input(data: dict) -> dict:
@@ -285,8 +259,7 @@ def build_segments(
     ctx_crit: int = 80,
     bar_width: int = 10,
     cache_ttl: int = CACHE_TTL,
-    _git_info_fn=git_info,
-    _session_timer_fn=session_timer,
+    _git_branch_fn=git_branch,
     _usage_fn=session_usage,
     _active_tool_fn=active_tool,
     _cache_remaining_fn=cache_remaining,
@@ -297,38 +270,20 @@ def build_segments(
     parts.append(f"{CYAN}{model}{RESET}")
 
     # 2. Branch
-    branch, porcelain = _git_info_fn(cwd)
+    branch = _git_branch_fn(cwd)
     if branch:
         parts.append(f"{CYAN}{branch}{RESET}")
 
-    # 3. Git state
-    if porcelain:
-        staged    = sum(1 for l in porcelain.splitlines() if l[:1] in "MADRC")
-        modified  = sum(1 for l in porcelain.splitlines() if l[1:2] in "MD")
-        untracked = sum(1 for l in porcelain.splitlines() if l.startswith("??"))
-        git_str = ""
-        if staged:    git_str += f"+{staged} "
-        if modified:  git_str += f"~{modified} "
-        if untracked: git_str += f"?{untracked}"
-        parts.append(f"{YELLOW}{git_str.strip()}{RESET}")
-    elif branch:
-        parts.append(f"{GREEN}✓{RESET}")
-
-    # 4. Session timer
-    elapsed = _session_timer_fn(session_id)
-    if elapsed:
-        parts.append(f"{WHITE}{elapsed}{RESET}")
-
-    # 5. Tokens
+    # 3. Tokens
     usage = _usage_fn(session_id, transcript_path)
     if any(usage.values()):
         parts.append(
-            f"{WHITE}↑{format_tokens(usage['input_tokens'])} ↓{format_tokens(usage['output_tokens'])} "
+            f"{WHITE}↓{format_tokens(usage['output_tokens'])} "
             f"{DIM}R{WHITE}{format_tokens(usage['cache_read_input_tokens'])} "
             f"{DIM}W{WHITE}{format_tokens(usage['cache_creation_input_tokens'])}{RESET}"
         )
 
-    # 6. Context bar
+    # 4. Context bar
     if used_pct is not None:
         used_int = round(float(used_pct))
         if used_int >= ctx_crit:
@@ -341,16 +296,16 @@ def build_segments(
         bar = "█" * filled + "░" * (bar_width - filled)
         parts.append(f"{color}{bar} {used_int}%{RESET}")
 
-    # 7. Cache expiry countdown
+    # 5. Cache expiry countdown
     remaining = _cache_remaining_fn(transcript_path, cache_ttl)
     if remaining is not None:
         if remaining == 0:
-            parts.append(f"{DIM}cache expired{RESET}")
+            parts.append(f"{DIM}⌛ expired{RESET}")
         else:
             color = RED if remaining < 30 else YELLOW if remaining <= 120 else GREEN
-            parts.append(f"{color}cache {format_countdown(remaining)}{RESET}")
+            parts.append(f"{color}⏳ {format_countdown(remaining)}{RESET}")
 
-    # 8. Rate limits
+    # 6. Rate limits
     rate_parts = []
     if five_pct is not None:
         rate_parts.append(f"5h:{round(float(five_pct))}%")
@@ -359,11 +314,11 @@ def build_segments(
     if rate_parts:
         parts.append(f"{MAGENTA}{' '.join(rate_parts)}{RESET}")
 
-    # 9. Effort
+    # 7. Effort
     if effort:
         parts.append(f"{CYAN}🧠 {effort}{RESET}")
 
-    # 10. Active tool
+    # 8. Active tool
     tool = _active_tool_fn(session_id)
     if tool:
         parts.append(f"{YELLOW}⚙ {tool}{RESET}")
