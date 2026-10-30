@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Claude Code status line: model effort | project:branch | tokens | ctx% | cache"""
+"""Claude Code status line: profile | model effort | project:branch | tokens | ctx% | cache"""
 
 import json
 import os
@@ -32,6 +32,7 @@ LABEL   = "\033[38;5;243m"
 RATE    = "\033[38;5;110m"
 EFFORT  = "\033[38;5;80m"
 SEP     = "\033[38;5;238m"
+PROFILE = "\033[1;31m"
 RESET   = "\033[0m"
 
 def format_tokens(n: int) -> str:
@@ -222,6 +223,20 @@ def session_usage(session_id: str, transcript_path: str, _tmp_dir: pathlib.Path 
     return totals
 
 
+def claude_profile(name: str = "", env=os.environ) -> tuple[str, bool]:
+    """Profile label (`name`, else the config folder's name), and whether the folder is the standard `~/.claude`."""
+    default = pathlib.Path.home() / ".claude"
+    folder = pathlib.Path(env.get("CLAUDE_CONFIG_DIR") or default).expanduser().resolve()
+    return name or folder.name, folder == default.resolve()
+
+
+def profile_arg(argv: list[str]) -> str:
+    """Value of `--profile NAME`, which `make install NAME=...` puts into the status line command."""
+    if "--profile" in argv[:-1]:
+        return argv[argv.index("--profile") + 1]
+    return ""
+
+
 def git_branch(cwd: str) -> str:
     """Current branch name; empty if `cwd` is not in a git repo."""
     if not cwd:
@@ -290,6 +305,8 @@ def build_segments(
     five_resets_at=None,
     week_resets_at=None,
     *,
+    profile: str = "",
+    profile_default: bool = True,
     ctx_warn: int = 50,
     ctx_crit: int = 80,
     bar_width: int = 10,
@@ -300,6 +317,10 @@ def build_segments(
     _now=time.time,
 ) -> list[str]:
     parts = []
+
+    # Profile (Claude Code config folder)
+    if profile and not profile_default:
+        parts.append(f"🔴 {PROFILE}{profile}{RESET}")
 
     # 1. Model and effort
     level = f" {EFFORT}{effort}{RESET}" if effort else ""
@@ -400,8 +421,11 @@ def main() -> None:
         data = {}
 
     fields = parse_input(data)
+    profile, profile_default = claude_profile(profile_arg(sys.argv[1:]))
     segments = build_segments(
         **fields,
+        profile=profile,
+        profile_default=profile_default,
         ctx_warn=config.display.ctx_warn,
         ctx_crit=config.display.ctx_crit,
         bar_width=config.display.bar_width,

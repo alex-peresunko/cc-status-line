@@ -117,3 +117,20 @@ def test_clear_hook_survives_json_escapes():
         assert not state_file.exists()
     finally:
         state_file.unlink(missing_ok=True)
+
+
+def test_status_line_command_carries_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    assert ps.status_line(tmp_path / ".claude-work", "work")["command"] == "uv run ~/.claude-work/statusline.py --profile work"
+
+
+def test_profile_name_required_outside_default_folder(tmp_path, monkeypatch):
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    assert ps.check_profile(tmp_path / ".claude", "") is None
+    assert ps.check_profile(tmp_path / ".claude-work", "work") is None
+    assert "NAME=" in ps.check_profile(tmp_path / ".claude-work", "")
+
+
+@pytest.mark.parametrize("name", ["way-too-long-name", "a b", "x;rm"])
+def test_profile_name_must_be_short_and_plain(tmp_path, name):
+    assert "NAME must be" in ps.check_profile(tmp_path, name)

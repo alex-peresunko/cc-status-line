@@ -1,16 +1,28 @@
 #!/usr/bin/env python3
 """Patch <claude-dir>/settings.json to install or uninstall the status line."""
-import json, sys, pathlib
+import json, re, sys, pathlib
+
+PROFILE_NAME = re.compile(r"[A-Za-z0-9_-]{1,12}")
 
 
-def status_line(claude_dir):
+def check_profile(claude_dir, name):
+    """Error message for a missing or malformed profile name, else None. Only ~/.claude may omit it."""
+    if name and not PROFILE_NAME.fullmatch(name):
+        return f"NAME must be 1-12 letters, digits, '-' or '_': {name!r}"
+    if not name and claude_dir.resolve() != (pathlib.Path.home() / ".claude").resolve():
+        return f"{claude_dir} is not ~/.claude: pass a short profile name, e.g. make install DIR={claude_dir} NAME=work"
+    return None
+
+
+def status_line(claude_dir, name=""):
     script = claude_dir / "statusline.py"
     try:
         # ~ form keeps the default folder's command identical to what earlier installs wrote
         script = "~" / script.relative_to(pathlib.Path.home())
     except ValueError:
         pass
-    return {"type": "command", "command": f"uv run {script}", "refreshInterval": 5}
+    profile = f" --profile {name}" if name else ""
+    return {"type": "command", "command": f"uv run {script}{profile}", "refreshInterval": 5}
 
 def _jq(field):
     # printf, not echo: sh's echo expands the \n escapes inside the JSON and jq then rejects it
@@ -83,10 +95,10 @@ def _remove(data, event, cmd):
         del hooks[event]
 
 
-def install(claude_dir):
+def install(claude_dir, name=""):
     settings = claude_dir / "settings.json"
     data = load(settings)
-    data["statusLine"] = status_line(claude_dir)
+    data["statusLine"] = status_line(claude_dir, name)
     data.setdefault("hooks", {})
 
     for event, cmd in HOOKS:
@@ -119,10 +131,13 @@ def uninstall(claude_dir):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] not in ("install", "uninstall"):
-        sys.exit("Usage: patch-settings.py install|uninstall <claude-dir>")
+    if len(sys.argv) not in (3, 4) or sys.argv[1] not in ("install", "uninstall", "check"):
+        sys.exit("Usage: patch-settings.py install|check <claude-dir> [profile-name] | uninstall <claude-dir>")
     claude_dir = pathlib.Path(sys.argv[2]).expanduser().absolute()
+    name = sys.argv[3] if len(sys.argv) == 4 else ""
+    if sys.argv[1] in ("install", "check") and (error := check_profile(claude_dir, name)):
+        sys.exit(error)
     if sys.argv[1] == "install":
-        install(claude_dir)
-    else:
+        install(claude_dir, name)
+    elif sys.argv[1] == "uninstall":
         uninstall(claude_dir)

@@ -567,3 +567,28 @@ def test_parse_input_empty_dict():
     assert result["model"] == "Claude"
     assert result["transcript_path"] == ""
     assert result["total_in"] == 0
+
+
+def test_claude_profile_default():
+    assert sl.claude_profile("", {}) == (".claude", True)
+    assert sl.claude_profile("", {"CLAUDE_CONFIG_DIR": "~/.claude/"}) == (".claude", True)
+
+
+def test_claude_profile_custom(tmp_path):
+    env = {"CLAUDE_CONFIG_DIR": str(tmp_path / ".claude-personal")}
+    assert sl.claude_profile("", env) == (".claude-personal", False)
+    assert sl.claude_profile("work", env) == ("work", False)
+
+
+def test_profile_arg():
+    assert sl.profile_arg(["--profile", "work"]) == "work"
+    assert sl.profile_arg([]) == ""
+    assert sl.profile_arg(["--profile"]) == ""
+
+
+def test_build_segments_profile():
+    assert not any(".claude" in strip_ansi(s) for s in make_segments())
+    assert make_segments(profile=".claude") == make_segments()
+    custom = make_segments(profile=".claude-personal", profile_default=False)[0]
+    assert strip_ansi(custom) == "🔴 .claude-personal"
+    assert sl.PROFILE in custom
