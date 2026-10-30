@@ -1,4 +1,4 @@
-# Claude Code status line configuration (installed to ~/.claude/statusline.toml).
+# Claude Code status line configuration (installed to statusline.toml in the Claude config folder).
 # Re-read on every refresh: edits apply within seconds, no restart needed.
 # The CLAUDE_STATUS_CTX_WARN / _CTX_CRIT / _BAR_WIDTH / _CACHE_TTL env vars still override [display] and [cache].
 

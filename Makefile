@@ -1,21 +1,25 @@
-CLAUDE_DIR := $(HOME)/.claude
-SCRIPT     := statusline.py
+# Claude Code config folder to install into: `make install DIR=~/.claude-personal`.
+DIR    ?= $(or $(CLAUDE_CONFIG_DIR),$(HOME)/.claude)
+SCRIPT := statusline.py
 
 .PHONY: install uninstall test
 
 # The script must stay a symlink: claude_status/ is found next to the resolved file.
 install:
-	ln -sf $(PWD)/$(SCRIPT)  $(CLAUDE_DIR)/$(SCRIPT)
-	cp -n $(PWD)/config/statusline.default.toml $(CLAUDE_DIR)/statusline.toml || true
-	python3 $(PWD)/scripts/patch-settings.py install
+	@test -d $(DIR) || { echo "No such folder: $(DIR)"; exit 1; }
+	@echo "Installing into $(DIR)"
+	ln -sf $(PWD)/$(SCRIPT)  $(DIR)/$(SCRIPT)
+	cp -n $(PWD)/config/statusline.default.toml $(DIR)/statusline.toml || true
+	python3 $(PWD)/scripts/patch-settings.py install $(DIR)
 	@echo "Done. Restart Claude Code to activate the status line."
-	@echo "Features are toggled in $(CLAUDE_DIR)/statusline.toml"
+	@echo "Features are toggled in $(DIR)/statusline.toml"
 
 uninstall:
-	rm -f $(CLAUDE_DIR)/$(SCRIPT)
-	python3 $(PWD)/scripts/patch-settings.py uninstall
+	@echo "Uninstalling from $(DIR)"
+	rm -f $(DIR)/$(SCRIPT)
+	python3 $(PWD)/scripts/patch-settings.py uninstall $(DIR)
 	@echo "Done. Restart Claude Code to deactivate the status line."
-	@echo "Kept $(CLAUDE_DIR)/statusline.toml"
+	@echo "Kept $(DIR)/statusline.toml"
 
 test:
 	uv run --with pytest pytest tests/ -v

@@ -79,3 +79,16 @@ def test_shipped_template_matches_code_defaults():
     cfg = config._parse(raw)
     assert cfg == config.defaults()
     assert set(raw["features"]) == set(REGISTRY)
+
+
+def test_default_path_follows_claude_config_dir(tmp_path):
+    (tmp_path / "statusline.toml").write_text("[display]\nbar_width = 7\n")
+    assert config.load({"CLAUDE_CONFIG_DIR": str(tmp_path)}).display.bar_width == 7
+
+
+def test_explicit_config_wins_over_claude_config_dir(tmp_path):
+    (tmp_path / "statusline.toml").write_text("[display]\nbar_width = 7\n")
+    explicit = tmp_path / "explicit.toml"
+    explicit.write_text("[display]\nbar_width = 9\n")
+    env = {"CLAUDE_CONFIG_DIR": str(tmp_path), "CLAUDE_STATUS_CONFIG": str(explicit)}
+    assert config.load(env).display.bar_width == 9

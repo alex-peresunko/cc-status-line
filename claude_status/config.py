@@ -14,7 +14,6 @@ from claude_status.features import REGISTRY
 from claude_status.features.base import Settings
 
 CACHE_TTL = 300
-DEFAULT_PATH = pathlib.Path.home() / ".claude" / "statusline.toml"
 
 
 @dataclass(frozen=True)
@@ -103,8 +102,13 @@ def _apply_env(config: Config, env: Mapping[str, str]) -> Config:
     return config
 
 
+def default_path(env: Mapping[str, str]) -> pathlib.Path:
+    """CLAUDE_CONFIG_DIR reaches the status line command from the Claude Code process that was started with it."""
+    return pathlib.Path(env.get("CLAUDE_CONFIG_DIR") or pathlib.Path.home() / ".claude") / "statusline.toml"
+
+
 def load(env: Mapping[str, str] = os.environ) -> Config:
-    path = pathlib.Path(env.get("CLAUDE_STATUS_CONFIG") or DEFAULT_PATH)
+    path = pathlib.Path(env.get("CLAUDE_STATUS_CONFIG") or default_path(env))
     try:
         raw = tomllib.loads(path.read_text())
     except FileNotFoundError:

@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Patch ~/.claude/settings.json to install or uninstall the status line."""
+"""Patch <claude-dir>/settings.json to install or uninstall the status line."""
 import json, sys, pathlib
 
-SETTINGS = pathlib.Path.home() / ".claude" / "settings.json"
 
-STATUS_LINE = {
-    "type": "command",
-    "command": "uv run ~/.claude/statusline.py",
-    "refreshInterval": 5,
-}
+def status_line(claude_dir):
+    script = claude_dir / "statusline.py"
+    try:
+        # ~ form keeps the default folder's command identical to what earlier installs wrote
+        script = "~" / script.relative_to(pathlib.Path.home())
+    except ValueError:
+        pass
+    return {"type": "command", "command": f"uv run {script}", "refreshInterval": 5}
 
 def _jq(field):
     # printf, not echo: sh's echo expands the \n escapes inside the JSON and jq then rejects it
@@ -49,12 +51,12 @@ RETIRED_HOOKS = [
 ]
 
 
-def load():
-    return json.loads(SETTINGS.read_text())
+def load(settings):
+    return json.loads(settings.read_text()) if settings.exists() else {}
 
 
-def save(data):
-    SETTINGS.write_text(json.dumps(data, indent=2) + "\n")
+def save(settings, data):
+    settings.write_text(json.dumps(data, indent=2) + "\n")
 
 
 def _existing_cmds(data, event):
@@ -81,9 +83,10 @@ def _remove(data, event, cmd):
         del hooks[event]
 
 
-def install():
-    data = load()
-    data["statusLine"] = STATUS_LINE
+def install(claude_dir):
+    settings = claude_dir / "settings.json"
+    data = load(settings)
+    data["statusLine"] = status_line(claude_dir)
     data.setdefault("hooks", {})
 
     for event, cmd in HOOKS:
@@ -97,25 +100,29 @@ def install():
     for event, cmd in RETIRED_HOOKS:
         _remove(data, event, cmd)
 
-    save(data)
-    print("settings.json patched (install).")
+    save(settings, data)
+    print(f"{settings} patched (install).")
 
 
-def uninstall():
-    data = load()
+def uninstall(claude_dir):
+    settings = claude_dir / "settings.json"
+    if not settings.exists():
+        return
+    data = load(settings)
     data.pop("statusLine", None)
 
     for event, cmd in HOOKS + RETIRED_HOOKS:
         _remove(data, event, cmd)
 
-    save(data)
-    print("settings.json patched (uninstall).")
+    save(settings, data)
+    print(f"{settings} patched (uninstall).")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in ("install", "uninstall"):
-        sys.exit("Usage: patch-settings.py install|uninstall")
+    if len(sys.argv) != 3 or sys.argv[1] not in ("install", "uninstall"):
+        sys.exit("Usage: patch-settings.py install|uninstall <claude-dir>")
+    claude_dir = pathlib.Path(sys.argv[2]).expanduser().absolute()
     if sys.argv[1] == "install":
-        install()
+        install(claude_dir)
     else:
-        uninstall()
+        uninstall(claude_dir)

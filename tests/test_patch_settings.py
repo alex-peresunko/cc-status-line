@@ -19,10 +19,8 @@ OLD_POST_TOOL_USE = (
 
 
 @pytest.fixture
-def settings(tmp_path, monkeypatch):
-    path = tmp_path / "settings.json"
-    monkeypatch.setattr(ps, "SETTINGS", path)
-    return path
+def settings(tmp_path):
+    return tmp_path / "settings.json"
 
 
 def commands(path, event):
@@ -44,7 +42,7 @@ def test_legacy_form_is_what_earlier_installs_wrote():
 def test_install_migrates_legacy_hooks_in_place(settings):
     legacy = {"hooks": [{"type": "command", "command": ps._legacy(hook("UserPromptSubmit"))}]}
     settings.write_text(json.dumps({"hooks": {"UserPromptSubmit": [legacy]}}))
-    ps.install()
+    ps.install(settings.parent)
     assert commands(settings, "UserPromptSubmit") == [hook("UserPromptSubmit")]
 
 
@@ -54,7 +52,7 @@ def test_install_removes_retired_hooks_only(settings):
         "PreToolUse": [{"hooks": [{"type": "command", "command": retired("PreToolUse")}]}],
         "PostToolUse": [other, {"hooks": [{"type": "command", "command": OLD_POST_TOOL_USE}]}],
     }}))
-    ps.install()
+    ps.install(settings.parent)
     hooks = json.loads(settings.read_text())["hooks"]
     assert "PreToolUse" not in hooks
     assert commands(settings, "PostToolUse") == ["keep-me"]
@@ -62,9 +60,9 @@ def test_install_removes_retired_hooks_only(settings):
 
 def test_install_is_idempotent(settings):
     settings.write_text("{}")
-    ps.install()
+    ps.install(settings.parent)
     first = settings.read_text()
-    ps.install()
+    ps.install(settings.parent)
     assert settings.read_text() == first
 
 
@@ -77,9 +75,35 @@ def test_uninstall_removes_new_and_legacy_hooks_only(settings):
         ],
         "UserPromptSubmit": [{"hooks": [{"type": "command", "command": hook("UserPromptSubmit")}]}],
     }}))
-    ps.uninstall()
+    ps.uninstall(settings.parent)
     assert commands(settings, "PostToolUse") == ["keep-me"]
     assert "UserPromptSubmit" not in json.loads(settings.read_text())["hooks"]
+
+
+@pytest.mark.parametrize("folder, command", [
+    (".claude", "uv run ~/.claude/statusline.py"),
+    (".claude-personal", "uv run ~/.claude-personal/statusline.py"),
+])
+def test_status_line_command_points_into_the_folder(tmp_path, monkeypatch, folder, command):
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path)
+    assert ps.status_line(tmp_path / folder)["command"] == command
+
+
+def test_status_line_command_outside_home_is_absolute(tmp_path, monkeypatch):
+    monkeypatch.setattr(pathlib.Path, "home", lambda: tmp_path / "home")
+    assert ps.status_line(tmp_path / "cfg")["command"] == f"uv run {tmp_path}/cfg/statusline.py"
+
+
+def test_install_creates_missing_settings(settings):
+    ps.install(settings.parent)
+    data = json.loads(settings.read_text())
+    assert data["statusLine"] == ps.status_line(settings.parent)
+    assert commands(settings, "UserPromptSubmit") == [hook("UserPromptSubmit")]
+
+
+def test_uninstall_without_settings_creates_nothing(settings):
+    ps.uninstall(settings.parent)
+    assert not settings.exists()
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="hooks need jq")
