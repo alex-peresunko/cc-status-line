@@ -145,6 +145,17 @@ def format_countdown(seconds: int) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+def format_time_left(seconds: int) -> str:
+    """Coarse duration for a rate-limit reset: `2d:5h`, `3h:12m` or `45m`."""
+    minutes = seconds // 60
+    days, hours, mins = minutes // 1440, minutes // 60 % 24, minutes % 60
+    if days:
+        return f"{days}d:{hours}h"
+    if hours:
+        return f"{hours}h:{mins:02d}m"
+    return f"{mins}m"
+
+
 _TMP = pathlib.Path("/tmp")
 
 
@@ -244,8 +255,12 @@ def parse_input(data: dict) -> dict:
     cache_misses = max(0, int(pc.get("misses") or 0) - expiries)
 
     rl         = data.get("rate_limits", {})
-    five_pct   = (rl.get("five_hour") or {}).get("used_percentage")
-    week_pct   = (rl.get("seven_day") or {}).get("used_percentage")
+    five_hour  = rl.get("five_hour") or {}
+    seven_day  = rl.get("seven_day") or {}
+    five_pct   = five_hour.get("used_percentage")
+    week_pct   = seven_day.get("used_percentage")
+    five_resets_at = five_hour.get("resets_at")
+    week_resets_at = seven_day.get("resets_at")
 
     effort_raw = data.get("effort") or {}
     effort     = (effort_raw.get("level") if isinstance(effort_raw, dict) else effort_raw) or ""
@@ -253,7 +268,8 @@ def parse_input(data: dict) -> dict:
     return dict(
         model=model, cwd=cwd, project=project,
         session_id=session_id, transcript_path=transcript_path, total_in=total_in, ctx_size=ctx_size,
-        cache_expires_at=cache_expires_at, cache_misses=cache_misses, used_pct=used_pct, five_pct=five_pct, week_pct=week_pct, effort=effort,
+        cache_expires_at=cache_expires_at, cache_misses=cache_misses, used_pct=used_pct, five_pct=five_pct, week_pct=week_pct,
+        five_resets_at=five_resets_at, week_resets_at=week_resets_at, effort=effort,
     )
 
 
@@ -271,6 +287,8 @@ def build_segments(
     five_pct,
     week_pct,
     effort: str,
+    five_resets_at=None,
+    week_resets_at=None,
     *,
     ctx_warn: int = 50,
     ctx_crit: int = 80,
@@ -279,6 +297,7 @@ def build_segments(
     _git_branch_fn=git_branch,
     _usage_fn=session_usage,
     _cache_left_fn=cache_left,
+    _now=time.time,
 ) -> list[str]:
     parts = []
 
@@ -332,10 +351,13 @@ def build_segments(
 
     # 7. Rate limits
     rate_parts = []
-    if five_pct is not None:
-        rate_parts.append(f"5h:{round(float(five_pct))}%")
-    if week_pct is not None:
-        rate_parts.append(f"7d:{round(float(week_pct))}%")
+    for label, pct, resets_at in (("5h", five_pct, five_resets_at), ("7d", week_pct, week_resets_at)):
+        if pct is None:
+            continue
+        left = ""
+        if isinstance(resets_at, (int, float)):
+            left = f" ({format_time_left(max(0, int(resets_at - _now())))})"
+        rate_parts.append(f"{label}:{round(float(pct))}%{left}")
     if rate_parts:
         parts.append(f"{RATE}{' '.join(rate_parts)}{RESET}")
 

@@ -431,6 +431,27 @@ def test_build_segments_rate_limits():
     combined = joined(segs)
     assert "5h:45%" in combined
     assert "7d:20%" in combined
+    assert strip_ansi(segs[-1]) == "5h:45% 7d:20%"
+
+
+def test_build_segments_rate_limits_time_left():
+    fields = {**BASE_FIELDS, "five_pct": 7.0, "week_pct": 20.0,
+              "five_resets_at": 1000 + 3 * 3600 + 12 * 60 + 30, "week_resets_at": 1000 + 2 * 86400 + 5 * 3600}
+    segs = sl.build_segments(
+        **fields,
+        _git_branch_fn=lambda cwd: "main",
+        _usage_fn=lambda sid, path: USAGE,
+        _cache_left_fn=lambda expires_at, path, ttl: 222,
+        _now=lambda: 1000,
+    )
+    assert strip_ansi(segs[-1]) == "5h:7% (3h:12m) 7d:20% (2d:5h)"
+
+
+def test_format_time_left():
+    assert sl.format_time_left(45 * 60 + 59) == "45m"
+    assert sl.format_time_left(3600 + 5 * 60) == "1h:05m"
+    assert sl.format_time_left(6 * 86400 + 23 * 3600 + 59 * 60) == "6d:23h"
+    assert sl.format_time_left(0) == "0m"
 
 
 def test_build_segments_model_with_effort():
@@ -526,7 +547,12 @@ def test_parse_input_prompt_cache_and_window_size():
     assert (result["cache_expires_at"], result["cache_misses"], result["ctx_size"]) == (1792961243, 2, 200000)
     expiries = {"misses": 4, "miss_causes": {"ttl_expired_1h": 2, "cache_scope_or_ttl_changed": 1}}
     assert sl.parse_input({"prompt_cache": expiries})["cache_misses"] == 2
+    limits = {"rate_limits": {"five_hour": {"used_percentage": 7, "resets_at": 1792961243},
+                              "seven_day": {"used_percentage": 20, "resets_at": 1793000000}}}
+    result = sl.parse_input(limits)
+    assert (result["five_resets_at"], result["week_resets_at"]) == (1792961243, 1793000000)
     empty = sl.parse_input({})
+    assert (empty["five_resets_at"], empty["week_resets_at"]) == (None, None)
     assert (empty["cache_expires_at"], empty["cache_misses"], empty["ctx_size"]) == (None, 0, 0)
 
 
