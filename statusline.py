@@ -340,10 +340,10 @@ def build_segments(
     remaining = _cache_left_fn(cache_expires_at, transcript_path, cache_ttl)
     if remaining is not None:
         if remaining == 0:
-            parts.append(f"{DIM}⌛ expired{RESET}")
+            parts.append(f"{DIM}⧗ expired{RESET}")
         else:
             color = RED if remaining < 30 else YELLOW if remaining <= 120 else GREEN
-            parts.append(f"{color}⏳ {format_countdown(remaining)}{RESET}")
+            parts.append(f"{color}⧗ {format_countdown(remaining)}{RESET}")
 
     # 6. Cache misses
     if cache_misses > 0:

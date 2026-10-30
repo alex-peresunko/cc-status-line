@@ -466,11 +466,11 @@ def cache_segment(remaining):
         _usage_fn=lambda sid, path: USAGE,
         _cache_left_fn=lambda expires_at, path, ttl: remaining,
     )
-    return next((s for s in segs if "⏳" in s or "⌛" in s), None)
+    return next((s for s in segs if "⧗" in s), None)
 
 
 def test_build_segments_cache_countdown():
-    assert strip_ansi(cache_segment(222)) == "⏳ 3:42"
+    assert strip_ansi(cache_segment(222)) == "⧗ 3:42"
 
 
 def test_build_segments_cache_colors():
@@ -482,7 +482,7 @@ def test_build_segments_cache_colors():
 
 def test_build_segments_cache_expired():
     seg = cache_segment(0)
-    assert strip_ansi(seg) == "⌛ expired"
+    assert strip_ansi(seg) == "⧗ expired"
     assert sl.DIM in seg
 
 
@@ -492,7 +492,7 @@ def test_build_segments_cache_absent():
 
 def test_build_segments_cache_misses():
     assert "⚠" not in joined(make_segments())
-    assert "⏳ 3:42 | ⚠ 1 miss" in joined(make_segments(cache_misses=1))
+    assert "⧗ 3:42 | ⚠ 1 miss" in joined(make_segments(cache_misses=1))
     assert "⚠ 3 misses" in joined(make_segments(cache_misses=3))
 
 
