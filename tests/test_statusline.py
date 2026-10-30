@@ -342,7 +342,6 @@ BASE_FIELDS = dict(
     total_in=123_456,
     ctx_size=1_000_000,
     cache_expires_at=None,
-    cache_misses=0,
     used_pct=30.0,
     five_pct=None,
     week_pct=None,
@@ -490,12 +489,6 @@ def test_build_segments_cache_absent():
     assert cache_segment(None) is None
 
 
-def test_build_segments_cache_misses():
-    assert "⚠" not in joined(make_segments())
-    assert "⧗ 3:42 | ⚠ 1 miss" in joined(make_segments(cache_misses=1))
-    assert "⚠ 3 misses" in joined(make_segments(cache_misses=3))
-
-
 def test_build_segments_passes_ttl_and_path():
     seen = []
     sl.build_segments(
@@ -541,19 +534,17 @@ def test_build_context_maps_fields(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_parse_input_prompt_cache_and_window_size():
-    data = {"prompt_cache": {"expires_at": 1792961243, "misses": 2},
+    data = {"prompt_cache": {"expires_at": 1792961243},
             "context_window": {"context_window_size": 200000}}
     result = sl.parse_input(data)
-    assert (result["cache_expires_at"], result["cache_misses"], result["ctx_size"]) == (1792961243, 2, 200000)
-    expiries = {"misses": 4, "miss_causes": {"ttl_expired_1h": 2, "cache_scope_or_ttl_changed": 1}}
-    assert sl.parse_input({"prompt_cache": expiries})["cache_misses"] == 2
+    assert (result["cache_expires_at"], result["ctx_size"]) == (1792961243, 200000)
     limits = {"rate_limits": {"five_hour": {"used_percentage": 7, "resets_at": 1792961243},
                               "seven_day": {"used_percentage": 20, "resets_at": 1793000000}}}
     result = sl.parse_input(limits)
     assert (result["five_resets_at"], result["week_resets_at"]) == (1792961243, 1793000000)
     empty = sl.parse_input({})
     assert (empty["five_resets_at"], empty["week_resets_at"]) == (None, None)
-    assert (empty["cache_expires_at"], empty["cache_misses"], empty["ctx_size"]) == (None, 0, 0)
+    assert (empty["cache_expires_at"], empty["ctx_size"]) == (None, 0)
 
 
 def test_parse_input_project_is_start_folder():

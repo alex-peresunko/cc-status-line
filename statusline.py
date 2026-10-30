@@ -264,10 +264,6 @@ def parse_input(data: dict) -> dict:
 
     pc         = data.get("prompt_cache") or {}
     cache_expires_at = pc.get("expires_at")
-    causes     = pc.get("miss_causes") if isinstance(pc.get("miss_causes"), dict) else {}
-    # A rebuild after the TTL runs out is counted as a miss with a `ttl_expired_*` cause.
-    expiries   = sum(int(n or 0) for cause, n in causes.items() if cause.startswith("ttl_expired"))
-    cache_misses = max(0, int(pc.get("misses") or 0) - expiries)
 
     rl         = data.get("rate_limits", {})
     five_hour  = rl.get("five_hour") or {}
@@ -283,7 +279,7 @@ def parse_input(data: dict) -> dict:
     return dict(
         model=model, cwd=cwd, project=project,
         session_id=session_id, transcript_path=transcript_path, total_in=total_in, ctx_size=ctx_size,
-        cache_expires_at=cache_expires_at, cache_misses=cache_misses, used_pct=used_pct, five_pct=five_pct, week_pct=week_pct,
+        cache_expires_at=cache_expires_at, used_pct=used_pct, five_pct=five_pct, week_pct=week_pct,
         five_resets_at=five_resets_at, week_resets_at=week_resets_at, effort=effort,
     )
 
@@ -297,7 +293,6 @@ def build_segments(
     total_in: int,
     ctx_size: int,
     cache_expires_at,
-    cache_misses: int,
     used_pct,
     five_pct,
     week_pct,
@@ -366,11 +361,7 @@ def build_segments(
             color = RED if remaining < 30 else YELLOW if remaining <= 120 else GREEN
             parts.append(f"{color}⧗ {format_countdown(remaining)}{RESET}")
 
-    # 6. Cache misses
-    if cache_misses > 0:
-        parts.append(f"{YELLOW}⚠ {cache_misses} miss{'es' if cache_misses > 1 else ''}{RESET}")
-
-    # 7. Rate limits
+    # 6. Rate limits
     rate_parts = []
     for label, pct, resets_at in (("5h", five_pct, five_resets_at), ("7d", week_pct, week_resets_at)):
         if pct is None:
