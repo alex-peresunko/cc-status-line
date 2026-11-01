@@ -157,6 +157,12 @@ def format_time_left(seconds: int) -> str:
     return f"{mins}m"
 
 
+def pace_color(pct: int, seconds_left: float, window: int) -> str:
+    """GREEN when `pct` is at or below the share of `window` already elapsed, RED when above it."""
+    elapsed = window - min(max(seconds_left, 0), window)
+    return GREEN if pct <= elapsed / window * 100 else RED
+
+
 _TMP = pathlib.Path("/tmp")
 
 
@@ -363,13 +369,17 @@ def build_segments(
 
     # 6. Rate limits
     rate_parts = []
-    for label, pct, resets_at in (("5h", five_pct, five_resets_at), ("7d", week_pct, week_resets_at)):
+    limits = (("5h", five_pct, five_resets_at, 5 * 3600), ("7d", week_pct, week_resets_at, 7 * 86400))
+    for label, pct, resets_at, window in limits:
         if pct is None:
             continue
-        left = ""
+        pct_int = round(float(pct))
+        shown, left = f"{pct_int}%", ""
         if isinstance(resets_at, (int, float)):
-            left = f" ({format_time_left(max(0, int(resets_at - _now())))})"
-        rate_parts.append(f"{label}:{round(float(pct))}%{left}")
+            seconds_left = resets_at - _now()
+            shown = f"{pace_color(pct_int, seconds_left, window)}{shown}{RATE}"
+            left = f" ({format_time_left(max(0, int(seconds_left)))})"
+        rate_parts.append(f"{label}:{shown}{left}")
     if rate_parts:
         parts.append(f"{RATE}{' '.join(rate_parts)}{RESET}")
 

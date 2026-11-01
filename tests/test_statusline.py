@@ -583,3 +583,32 @@ def test_build_segments_profile():
     custom = make_segments(profile=".claude-personal", profile_default=False)[0]
     assert strip_ansi(custom) == "🔴 .claude-personal"
     assert sl.PROFILE in custom
+
+
+def rate_segment(five_pct, five_left, now=1000):
+    fields = {**BASE_FIELDS, "five_pct": five_pct, "week_pct": None, "five_resets_at": now + five_left}
+    segs = sl.build_segments(
+        **fields,
+        _git_branch_fn=lambda cwd: "main",
+        _usage_fn=lambda sid, path: USAGE,
+        _cache_left_fn=lambda expires_at, path, ttl: None,
+        _now=lambda: now,
+    )
+    return segs[-1]
+
+
+def test_rate_limit_below_pace_is_green():
+    assert f"{sl.GREEN}7%" in rate_segment(7.0, 4 * 3600 + 30 * 60)
+
+
+def test_rate_limit_on_pace_is_green():
+    assert f"{sl.GREEN}10%" in rate_segment(10.0, 4 * 3600 + 30 * 60)
+
+
+def test_rate_limit_above_pace_is_red():
+    assert f"{sl.RED}40%" in rate_segment(40.0, 4 * 3600)
+
+
+def test_rate_limit_without_reset_time_is_uncolored():
+    seg = make_segments(five_pct=45.0, week_pct=20.0)[-1]
+    assert sl.GREEN not in seg and sl.RED not in seg
