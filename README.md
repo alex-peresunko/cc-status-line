@@ -4,7 +4,7 @@
 
 **A status line for [Claude Code](https://docs.claude.com/en/docs/claude-code) that shows what the session costs and how long it has left.**
 
-Model and effort · project and branch · token totals · context fill · prompt-cache countdown · rate-limit pace
+Model and effort · project and branch · token totals · session cost · context fill · prompt-cache countdown · rate-limit pace
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![No dependencies](https://img.shields.io/badge/dependencies-none-4ec96f)
@@ -25,6 +25,7 @@ Model and effort · project and branch · token totals · context fill · prompt
 | Model | 🧠 `Opus 5.5 high` | Model display name and reasoning effort |
 | Location | `cc-status-line:main` | Project folder and current git branch |
 | Tokens | `↓48k R12.4M W610k` | Session totals: output tokens, cache reads, cache writes |
+| Cost | `$3.46` | Session cost in USD as estimated by Claude Code from list prices (grey) |
 | Context | `██░░░░░░░░ 231k/1M (23%)` | Context window fill. Green, then yellow from 50%, red from 80% |
 | Cache | `⧗ 4:07` | Time until the prompt cache expires. Yellow under 2 minutes, red under 30 seconds |
 | Rate limits | `5h:31% (3h:12m) 7d:64% (2d:5h)` | Usage of the 5-hour and 7-day limits, and time to reset |

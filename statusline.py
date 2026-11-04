@@ -282,11 +282,14 @@ def parse_input(data: dict) -> dict:
     effort_raw = data.get("effort") or {}
     effort     = (effort_raw.get("level") if isinstance(effort_raw, dict) else effort_raw) or ""
 
+    cost_usd   = (data.get("cost") or {}).get("total_cost_usd")
+
     return dict(
         model=model, cwd=cwd, project=project,
         session_id=session_id, transcript_path=transcript_path, total_in=total_in, ctx_size=ctx_size,
         cache_expires_at=cache_expires_at, used_pct=used_pct, five_pct=five_pct, week_pct=week_pct,
         five_resets_at=five_resets_at, week_resets_at=week_resets_at, effort=effort,
+        cost_usd=cost_usd,
     )
 
 
@@ -305,6 +308,7 @@ def build_segments(
     effort: str,
     five_resets_at=None,
     week_resets_at=None,
+    cost_usd=None,
     *,
     profile: str = "",
     profile_default: bool = True,
@@ -342,6 +346,10 @@ def build_segments(
             f"{LABEL}R{TOKENS}{format_tokens(usage['cache_read_input_tokens'])} "
             f"{LABEL}W{TOKENS}{format_tokens(usage['cache_creation_input_tokens'])}{RESET}"
         )
+
+    # Session cost, as estimated by Claude Code from list prices
+    if isinstance(cost_usd, (int, float)):
+        parts.append(f"{DIM}${cost_usd:.2f}{RESET}")
 
     # 4. Context bar
     if used_pct is not None:

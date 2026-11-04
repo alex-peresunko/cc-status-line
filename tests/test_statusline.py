@@ -453,6 +453,13 @@ def test_format_time_left():
     assert sl.format_time_left(0) == "0m"
 
 
+def test_build_segments_cost():
+    segs = make_segments(cost_usd=1.234)
+    assert "W300k | $1.23 | " in joined(segs)
+    assert f"{sl.DIM}$1.23{sl.RESET}" in segs
+    assert "$" not in joined(make_segments())
+
+
 def test_build_segments_model_with_effort():
     assert [strip_ansi(x) for x in make_segments(effort="high")[:2]] == ["🧠 claude-sonnet-4-6 high", "myproject:main"]
     assert strip_ansi(make_segments()[0]) == "🧠 claude-sonnet-4-6"
@@ -551,6 +558,11 @@ def test_parse_input_project_is_start_folder():
     workspace = {"current_dir": "/home/u/repo/src", "project_dir": "/home/u/repo/"}
     assert sl.parse_input({"workspace": workspace})["project"] == "repo"
     assert sl.parse_input({"workspace": {"current_dir": "/home/u/other"}})["project"] == "other"
+
+
+def test_parse_input_cost():
+    assert sl.parse_input({"cost": {"total_cost_usd": 1.234}})["cost_usd"] == 1.234
+    assert sl.parse_input({})["cost_usd"] is None
 
 
 def test_parse_input_empty_dict():
