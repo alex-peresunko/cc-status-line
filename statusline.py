@@ -88,6 +88,39 @@ def tool_in_flight(transcript_path: str) -> bool:
     return bool(called - answered)
 
 
+_LOCAL_COMMAND = ("<command-name>", "<local-command-stdout>", "<local-command-caveat>")
+_INTERRUPTED = "[Request interrupted by user"
+
+
+def awaiting_response(transcript_path: str) -> bool:
+    """True while a prompt or tool result sent to the model has no reply yet in the transcript.
+
+    Local slash-command entries and interrupt markers get no reply, so they don't count, and nothing
+    before a compaction summary is pending.
+    """
+    for line in reversed(_transcript_tail(transcript_path) or []):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if (not isinstance(entry, dict) or entry.get("isSidechain") or entry.get("isMeta")
+                or entry.get("type") not in ("assistant", "user")):
+            continue
+        if entry["type"] == "assistant" or entry.get("isCompactSummary"):
+            return False
+        content = (entry.get("message") or {}).get("content")
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+        else:
+            continue
+        if text.lstrip().startswith(_LOCAL_COMMAND):
+            continue
+        return not text.startswith(_INTERRUPTED)
+    return False
+
+
 _TASK_ID = re.compile(r"<task-id>([^<]+)</task-id>")
 
 
@@ -430,6 +463,7 @@ def build_context(
     _cache_left_fn=cache_left,
     _tool_in_flight_fn=tool_in_flight,
     _background_agents_fn=background_agents_running,
+    _awaiting_response_fn=awaiting_response,
     _last_prompt_fn=last_prompt,
     _now=time.time,
 ) -> Context:
@@ -439,6 +473,7 @@ def build_context(
         cache_remaining=_cache_left_fn(fields["cache_expires_at"], fields["transcript_path"], cache_ttl),
         tool_in_flight=_tool_in_flight_fn(fields["transcript_path"]),
         background_agents=_background_agents_fn(fields["transcript_path"]),
+        awaiting_response=_awaiting_response_fn(fields["transcript_path"]),
         last_prompt=_last_prompt_fn(fields["transcript_path"]),
         env=env,
         now=_now(),

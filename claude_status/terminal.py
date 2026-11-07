@@ -7,13 +7,17 @@ _SGR = re.compile(r"\x1b\[([0-9;]*)m")
 _RULE = re.compile(r"^─{10,}")
 _PROMPT = "❯"
 
+_ENTER_DELAY = "0.5"
+
 _ITERM_SCRIPT = """\
 tell application "iTerm2"
     repeat with w in windows
         repeat with t in tabs of w
             repeat with s in sessions of t
                 if unique id of s is "{guid}" then
-                    tell s to write text {text}
+                    tell s to write text {text} newline NO
+                    delay {delay}
+                    tell s to write text ""
                     return
                 end if
             end repeat
@@ -27,17 +31,19 @@ def _applescript_string(s: str) -> str:
 
 
 def type_line(env: Mapping[str, str], text: str) -> list[str] | None:
-    """argv that types `text` plus Enter into the terminal hosting this session.
+    """argv that types `text`, then Enter after `_ENTER_DELAY` seconds, into the terminal hosting this session.
 
-    None when the terminal isn't recognised. tmux is checked first: inside tmux-in-iTerm2
+    Claude Code reads an Enter that arrives in the same burst as typed text as part of a paste, so it
+    inserts a newline instead of submitting; the delay keeps them apart. None when the terminal isn't recognised. tmux is checked first: inside tmux-in-iTerm2
     the pane, not the iTerm2 session, is where the input must go.
     """
     pane = env.get("TMUX_PANE")
     if pane:
-        return ["tmux", "send-keys", "-t", pane, "-l", text, ";", "send-keys", "-t", pane, "Enter"]
+        return ["tmux", "send-keys", "-t", pane, "-l", text, ";", "run-shell", f"sleep {_ENTER_DELAY}", ";",
+                "send-keys", "-t", pane, "Enter"]
     iterm = _ITERM_SESSION.match(env.get("ITERM_SESSION_ID", ""))
     if iterm:
-        return ["osascript", "-e", _ITERM_SCRIPT.format(guid=iterm[1], text=_applescript_string(text))]
+        return ["osascript", "-e", _ITERM_SCRIPT.format(guid=iterm[1], text=_applescript_string(text), delay=_ENTER_DELAY)]
     return None
 
 

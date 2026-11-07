@@ -514,6 +514,47 @@ def test_build_segments_no_session_id():
     assert any("claude-sonnet-4-6" in strip_ansi(s) for s in segs)
 
 
+def awaiting(tmp_path, *lines):
+    return sl.awaiting_response(write_transcript(tmp_path, *lines))
+
+
+def text_entry(kind, text, **extra):
+    return entry(kind, 1, message={"content": [{"type": "text", "text": text}]}, **extra)
+
+
+def test_awaiting_response_after_prompt_or_tool_result(tmp_path):
+    assert awaiting(tmp_path, text_entry("assistant", "done"), prompt("next"))
+    assert awaiting(tmp_path, prompt(), tool_use("a"), tool_result("a"))
+    assert not awaiting(tmp_path, prompt(), tool_use("a"), tool_result("a"), text_entry("assistant", "done"))
+
+
+def test_awaiting_response_ignores_local_commands_meta_and_sidechain(tmp_path):
+    done = text_entry("assistant", "done")
+    caveat = prompt("<local-command-caveat>x</local-command-caveat>")
+    meta = entry("user", 1, message={"content": "anything"}, isMeta=True)
+    command = prompt("<command-name>/model</command-name>")
+    stdout = prompt("<local-command-stdout>Set model</local-command-stdout>")
+    side_line = entry("user", 1, message={"content": "subagent task"}, isSidechain=True)
+    assert not awaiting(tmp_path, prompt(), done, caveat, meta, command, stdout, side_line)
+
+
+def test_awaiting_response_not_after_compaction(tmp_path):
+    summary = entry("user", 1, message={"content": "This session is being continued"}, isCompactSummary=True)
+    stdout = prompt("<local-command-stdout>Compacted</local-command-stdout>")
+    assert not awaiting(tmp_path, prompt("/compact"), summary, stdout)
+
+
+def test_awaiting_response_not_after_interrupt(tmp_path):
+    assert not awaiting(tmp_path, prompt(), text_entry("user", "[Request interrupted by user]"))
+    assert not awaiting(tmp_path, prompt(), tool_use("a"), text_entry("user", "[Request interrupted by user for tool use]"))
+
+
+def test_awaiting_response_unreadable_or_empty(tmp_path):
+    assert not sl.awaiting_response("")
+    assert not sl.awaiting_response(str(tmp_path / "missing.jsonl"))
+    assert not awaiting(tmp_path, "not json", "[1, 2]", "")
+
+
 def test_last_prompt_is_latest_main_thread_prompt(tmp_path):
     meta = entry("user", 2, message={"content": "<local-command-caveat>x</local-command-caveat>"}, isMeta=True)
     side = entry("user", 1, message={"content": "subagent task"}, isSidechain=True)
@@ -545,12 +586,14 @@ def test_build_context_maps_fields(tmp_path):
         _cache_left_fn=lambda expires_at, path, ttl: seen.append((expires_at, path, ttl)) or 77,
         _tool_in_flight_fn=lambda path: path == "/tmp/t.jsonl",
         _background_agents_fn=lambda path: path != "/tmp/t.jsonl",
+        _awaiting_response_fn=lambda path: path == "/tmp/t.jsonl",
         _last_prompt_fn=lambda path: f"last of {path}",
         _now=lambda: 42.0,
     )
     assert seen == [(99, "/tmp/t.jsonl", 3600)]
     assert (ctx.session_id, ctx.total_in, ctx.cache_remaining, ctx.tool_in_flight) == ("s1", 123_456, 77, True)
     assert ctx.background_agents is False
+    assert ctx.awaiting_response is True
     assert ctx.last_prompt == "last of /tmp/t.jsonl"
     assert ctx.env == {"TMUX_PANE": "%2"}
     assert ctx.now == 42.0

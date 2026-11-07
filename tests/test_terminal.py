@@ -10,14 +10,17 @@ GUID = "6C2B1A3E-0F4D-4B8A-9E57-1D2C3B4A5F60"
 
 def test_tmux():
     argv = terminal.type_line({"TMUX_PANE": "%3"}, "/compact")
-    assert argv == ["tmux", "send-keys", "-t", "%3", "-l", "/compact", ";", "send-keys", "-t", "%3", "Enter"]
+    assert argv == ["tmux", "send-keys", "-t", "%3", "-l", "/compact", ";", "run-shell", "sleep 0.5", ";",
+                    "send-keys", "-t", "%3", "Enter"]
 
 
 def test_iterm_extracts_session_guid():
     argv = terminal.type_line({"ITERM_SESSION_ID": f"w0t2p1:{GUID}"}, "/compact")
     assert argv[:2] == ["osascript", "-e"]
     assert f'unique id of s is "{GUID}"' in argv[2]
-    assert 'write text "/compact"' in argv[2]
+    assert 'write text "/compact" newline NO' in argv[2]
+    assert 'delay 0.5' in argv[2]
+    assert 'write text ""' in argv[2]
 
 
 def test_tmux_wins_over_iterm():

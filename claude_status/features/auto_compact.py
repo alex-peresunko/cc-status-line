@@ -37,11 +37,13 @@ def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=termina
     Pings stop after `keep_warm` in a row; the streak continues only while the last prompt in the
     transcript is `PING`, so any other prompt starts a new one.
     Skipped while a tool call is in flight (typing Enter could approve a pending permission prompt),
+    while a request awaits its reply (the cache countdown only restarts when the reply lands),
     while background subagents are running, and while text is typed in the input box. A tick skipped
     for typed text leaves no marker, so a later tick of the same window can still fire.
     """
     remaining = ctx.cache_remaining
-    if (not ctx.session_id or ctx.tool_in_flight or ctx.background_agents or remaining is None
+    if (not ctx.session_id or ctx.tool_in_flight or ctx.awaiting_response
+            or ctx.background_agents or remaining is None
             or not 0 < remaining <= settings.within):
         return False
     streak_file = ctx.state_dir / f"claude-keepwarm-{ctx.session_id}"

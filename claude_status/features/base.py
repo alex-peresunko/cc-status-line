@@ -15,6 +15,7 @@ class Context:
     cache_remaining: int | None
     tool_in_flight: bool
     background_agents: bool
+    awaiting_response: bool
     last_prompt: str | None
     env: Mapping[str, str]
     now: float

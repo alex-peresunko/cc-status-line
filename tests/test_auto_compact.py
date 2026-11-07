@@ -13,7 +13,7 @@ SETTINGS = AutoCompactSettings(enabled=True, tokens=100_000, within=90)
 def ctx(tmp_path, **overrides):
     fields = dict(
         session_id="sess-1", total_in=120_000, cache_remaining=60, tool_in_flight=False, background_agents=False,
-        last_prompt="hi", env=TMUX, now=1_000_000.0, state_dir=tmp_path,
+        awaiting_response=False, last_prompt="hi", env=TMUX, now=1_000_000.0, state_dir=tmp_path,
     )
     return Context(**{**fields, **overrides})
 
@@ -27,7 +27,8 @@ def fire(tmp_path, settings=SETTINGS, typed=False, **overrides):
 def test_fires_and_spawns_terminal_command(tmp_path):
     fired, spawned = fire(tmp_path)
     assert fired
-    assert spawned == [["tmux", "send-keys", "-t", "%1", "-l", "/compact", ";", "send-keys", "-t", "%1", "Enter"]]
+    assert spawned == [["tmux", "send-keys", "-t", "%1", "-l", "/compact", ";", "run-shell", "sleep 0.5", ";",
+                        "send-keys", "-t", "%1", "Enter"]]
 
 
 def typed(spawned):
@@ -52,6 +53,12 @@ def test_never_when_cache_expired_or_unknown(tmp_path):
 
 def test_not_while_tool_in_flight(tmp_path):
     assert not fire(tmp_path, tool_in_flight=True)[0]
+
+
+def test_not_while_a_request_awaits_its_reply(tmp_path):
+    assert not fire(tmp_path, awaiting_response=True)[0]
+    assert not fire(tmp_path, awaiting_response=True, total_in=50_000)[0]
+    assert not list(tmp_path.iterdir())
 
 
 def test_not_while_background_agents_running(tmp_path):
