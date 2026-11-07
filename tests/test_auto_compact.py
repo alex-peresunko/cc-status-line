@@ -104,30 +104,37 @@ def test_unwritable_marker_means_no_spawn(tmp_path):
 BELOW = dict(total_in=50_000)
 
 
-def ping_window(tmp_path, n, settings=SETTINGS, **overrides):
-    """Fire in the n-th consecutive cache window (one per hour)."""
-    return fire(tmp_path, settings, now=1_000_000.0 + 3600 * n, **{**BELOW, **overrides})
+def ping_window(tmp_path, minute, settings=SETTINGS, **overrides):
+    """Fire in the window whose cache expires `minute` minutes after the first one."""
+    return fire(tmp_path, settings, now=1_000_000.0 + 60 * minute, **{**BELOW, **overrides})
 
 
-def test_pings_stop_at_the_cap(tmp_path):
-    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm=3)
+def test_pings_stop_after_keep_warm_minutes(tmp_path):
+    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm_minutes=20)
     assert ping_window(tmp_path, 0, settings, last_prompt="real question")[0]
-    assert ping_window(tmp_path, 1, settings, last_prompt=PING)[0]
-    assert ping_window(tmp_path, 2, settings, last_prompt=PING)[0]
-    assert not ping_window(tmp_path, 3, settings, last_prompt=PING)[0]
-    assert not ping_window(tmp_path, 4, settings, last_prompt=PING)[0]
+    for minute in (5, 10, 15):
+        assert ping_window(tmp_path, minute, settings, last_prompt=PING)[0]
+    assert not ping_window(tmp_path, 20, settings, last_prompt=PING)[0]
+    assert not ping_window(tmp_path, 25, settings, last_prompt=PING)[0]
 
 
 def test_another_prompt_starts_a_new_streak(tmp_path):
-    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm=1)
+    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm_minutes=5)
     assert ping_window(tmp_path, 0, settings)[0]
-    assert not ping_window(tmp_path, 1, settings, last_prompt=PING)[0]
-    assert ping_window(tmp_path, 2, settings, last_prompt="hi again")[0]
-    assert ping_window(tmp_path, 3, settings, last_prompt=None)[0]
+    assert not ping_window(tmp_path, 5, settings, last_prompt=PING)[0]
+    assert ping_window(tmp_path, 10, settings, last_prompt="hi again")[0]
+    assert ping_window(tmp_path, 15, settings, last_prompt=None)[0]
+
+
+def test_lost_streak_state_starts_a_new_streak(tmp_path):
+    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm_minutes=5)
+    assert ping_window(tmp_path, 0, settings, last_prompt=PING)[0]
+    (tmp_path / "claude-keepwarm-sess-1").unlink()
+    assert ping_window(tmp_path, 5, settings, last_prompt=PING)[0]
 
 
 def test_keep_warm_zero_disables_pings(tmp_path):
-    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm=0)
+    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm_minutes=0)
     fired, spawned = ping_window(tmp_path, 0, settings)
     assert not fired and spawned == []
     assert not list(tmp_path.iterdir())

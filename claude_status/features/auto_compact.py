@@ -12,7 +12,7 @@ PING = "Cache keep-alive ping, not a request. Ignore it and reply only: ok"
 class AutoCompactSettings(Settings):
     tokens: int = 150_000
     within: int = 30
-    keep_warm: int = 12
+    keep_warm_minutes: int = 60
 
 
 def _already_fired(marker: pathlib.Path, expiry: int) -> bool:
@@ -22,11 +22,11 @@ def _already_fired(marker: pathlib.Path, expiry: int) -> bool:
         return False
 
 
-def _read_streak(path: pathlib.Path) -> int:
+def _read_streak_start(path: pathlib.Path) -> int | None:
     try:
         return int(path.read_text())
     except (OSError, ValueError):
-        return 0
+        return None
 
 
 def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=terminal.spawn_detached,
@@ -34,8 +34,9 @@ def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=termina
     """Before the prompt cache expires, type /compact into the session's terminal, or `PING` while the
     context is below `tokens`. At most one of them per cache expiry.
 
-    Pings stop after `keep_warm` in a row; the streak continues only while the last prompt in the
-    transcript is `PING`, so any other prompt starts a new one.
+    Pings in a row keep the cache warm for about `keep_warm_minutes` past the expiry the first of them
+    extended (0 = no pings); the streak continues only while the last prompt in the transcript is `PING`,
+    so any other prompt starts a new one.
     Skipped while a tool call is in flight (typing Enter could approve a pending permission prompt),
     while a request awaits its reply (the cache countdown only restarts when the reply lands),
     while background subagents are running, and while text is typed in the input box. A tick skipped
@@ -46,25 +47,27 @@ def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=termina
             or ctx.background_agents or remaining is None
             or not 0 < remaining <= settings.within):
         return False
+    expiry = int(ctx.now + remaining)
     streak_file = ctx.state_dir / f"claude-keepwarm-{ctx.session_id}"
+    streak_start = None
     if ctx.total_in >= settings.tokens:
-        text, streak = "/compact", None
+        text = "/compact"
     else:
-        streak = _read_streak(streak_file) if ctx.last_prompt == PING else 0
-        if streak >= settings.keep_warm:
+        streak_start = _read_streak_start(streak_file) if ctx.last_prompt == PING else None
+        streak_start = expiry if streak_start is None else streak_start
+        if expiry - streak_start >= settings.keep_warm_minutes * 60:
             return False
         text = PING
     cmd = terminal.type_line(ctx.env, text)
     if cmd is None:
         return False
-    expiry = int(ctx.now + remaining)
     marker = ctx.state_dir / f"claude-compact-{ctx.session_id}"
     if _already_fired(marker, expiry) or _has_input(ctx.env):
         return False
     try:
         marker.write_text(str(expiry))
-        if streak is not None:
-            streak_file.write_text(str(streak + 1))
+        if streak_start is not None:
+            streak_file.write_text(str(streak_start))
     except OSError:
         return False
     _spawn(cmd)
