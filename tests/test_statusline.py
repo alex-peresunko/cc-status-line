@@ -514,6 +514,24 @@ def test_build_segments_no_session_id():
     assert any("claude-sonnet-4-6" in strip_ansi(s) for s in segs)
 
 
+def test_last_prompt_is_latest_main_thread_prompt(tmp_path):
+    meta = entry("user", 2, message={"content": "<local-command-caveat>x</local-command-caveat>"}, isMeta=True)
+    side = entry("user", 1, message={"content": "subagent task"}, isSidechain=True)
+    path = write_transcript(tmp_path, prompt("old"), prompt("  latest \n"), tool_use("a"), tool_result("a"), meta, side)
+    assert sl.last_prompt(path) == "latest"
+
+
+def test_last_prompt_from_text_blocks(tmp_path):
+    blocks = entry("user", 1, message={"content": [{"type": "text", "text": "with image"}, {"type": "image"}]})
+    assert sl.last_prompt(write_transcript(tmp_path, prompt("old"), blocks)) == "with image"
+
+
+def test_last_prompt_unknown(tmp_path):
+    assert sl.last_prompt("") is None
+    assert sl.last_prompt(str(tmp_path / "missing.jsonl")) is None
+    assert sl.last_prompt(write_transcript(tmp_path, "not json", tool_use("a"), tool_result("a"))) is None
+
+
 # ---------------------------------------------------------------------------
 # build_context
 # ---------------------------------------------------------------------------
@@ -527,11 +545,13 @@ def test_build_context_maps_fields(tmp_path):
         _cache_left_fn=lambda expires_at, path, ttl: seen.append((expires_at, path, ttl)) or 77,
         _tool_in_flight_fn=lambda path: path == "/tmp/t.jsonl",
         _background_agents_fn=lambda path: path != "/tmp/t.jsonl",
+        _last_prompt_fn=lambda path: f"last of {path}",
         _now=lambda: 42.0,
     )
     assert seen == [(99, "/tmp/t.jsonl", 3600)]
     assert (ctx.session_id, ctx.total_in, ctx.cache_remaining, ctx.tool_in_flight) == ("s1", 123_456, 77, True)
     assert ctx.background_agents is False
+    assert ctx.last_prompt == "last of /tmp/t.jsonl"
     assert ctx.env == {"TMUX_PANE": "%2"}
     assert ctx.now == 42.0
 

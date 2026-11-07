@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 from claude_status.features import REGISTRY, run_enabled
-from claude_status.features.auto_compact import AutoCompact, AutoCompactSettings, maybe_compact
+from claude_status.features.auto_compact import PING, AutoCompact, AutoCompactSettings, maybe_compact
 from claude_status.features.base import Context, Feature, Settings
 
 TMUX = {"TMUX_PANE": "%1"}
@@ -13,7 +13,7 @@ SETTINGS = AutoCompactSettings(enabled=True, tokens=100_000, within=90)
 def ctx(tmp_path, **overrides):
     fields = dict(
         session_id="sess-1", total_in=120_000, cache_remaining=60, tool_in_flight=False, background_agents=False,
-        env=TMUX, now=1_000_000.0, state_dir=tmp_path,
+        last_prompt="hi", env=TMUX, now=1_000_000.0, state_dir=tmp_path,
     )
     return Context(**{**fields, **overrides})
 
@@ -30,9 +30,16 @@ def test_fires_and_spawns_terminal_command(tmp_path):
     assert spawned == [["tmux", "send-keys", "-t", "%1", "-l", "/compact", ";", "send-keys", "-t", "%1", "Enter"]]
 
 
-def test_threshold_boundaries(tmp_path):
-    assert fire(tmp_path, total_in=100_000)[0]
-    assert not fire(tmp_path, total_in=99_999)[0]
+def typed(spawned):
+    return [cmd[5] for cmd in spawned]
+
+
+def test_token_threshold_picks_compact_or_ping(tmp_path):
+    assert typed(fire(tmp_path, session_id="a", total_in=100_000)[1]) == ["/compact"]
+    assert typed(fire(tmp_path, session_id="b", total_in=99_999)[1]) == [PING]
+
+
+def test_window_boundaries(tmp_path):
     assert fire(tmp_path, cache_remaining=90)[0]
     assert not fire(tmp_path, cache_remaining=91)[0]
     assert fire(tmp_path, cache_remaining=1)[0]
@@ -85,6 +92,50 @@ def test_sessions_are_independent(tmp_path):
 def test_unwritable_marker_means_no_spawn(tmp_path):
     fired, spawned = fire(tmp_path / "missing-dir")
     assert not fired and spawned == []
+
+
+BELOW = dict(total_in=50_000)
+
+
+def ping_window(tmp_path, n, settings=SETTINGS, **overrides):
+    """Fire in the n-th consecutive cache window (one per hour)."""
+    return fire(tmp_path, settings, now=1_000_000.0 + 3600 * n, **{**BELOW, **overrides})
+
+
+def test_pings_stop_at_the_cap(tmp_path):
+    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm=3)
+    assert ping_window(tmp_path, 0, settings, last_prompt="real question")[0]
+    assert ping_window(tmp_path, 1, settings, last_prompt=PING)[0]
+    assert ping_window(tmp_path, 2, settings, last_prompt=PING)[0]
+    assert not ping_window(tmp_path, 3, settings, last_prompt=PING)[0]
+    assert not ping_window(tmp_path, 4, settings, last_prompt=PING)[0]
+
+
+def test_another_prompt_starts_a_new_streak(tmp_path):
+    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm=1)
+    assert ping_window(tmp_path, 0, settings)[0]
+    assert not ping_window(tmp_path, 1, settings, last_prompt=PING)[0]
+    assert ping_window(tmp_path, 2, settings, last_prompt="hi again")[0]
+    assert ping_window(tmp_path, 3, settings, last_prompt=None)[0]
+
+
+def test_keep_warm_zero_disables_pings(tmp_path):
+    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm=0)
+    fired, spawned = ping_window(tmp_path, 0, settings)
+    assert not fired and spawned == []
+    assert not list(tmp_path.iterdir())
+
+
+def test_ping_once_per_cache_expiry_and_not_while_typing(tmp_path):
+    assert not fire(tmp_path, typed=True, **BELOW)[0]
+    assert not list(tmp_path.iterdir())
+    assert fire(tmp_path, **BELOW)[0]
+    assert not fire(tmp_path, cache_remaining=55, now=1_000_005.0, **BELOW)[0]
+
+
+def test_compact_does_not_count_towards_the_streak(tmp_path):
+    assert fire(tmp_path)[0]
+    assert not (tmp_path / "claude-keepwarm-sess-1").exists()
 
 
 def test_feature_registered_and_default_off():

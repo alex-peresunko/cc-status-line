@@ -18,3 +18,4 @@ ttl = 300            # seconds; used only when Claude Code sends no prompt_cache
 enabled = false
 tokens  = 150000     # compact at or above this many context tokens
 within  = 30         # ... when this many seconds or fewer of cache remain
+keep_warm = 12       # below tokens, send a keep-alive ping instead, at most this many in a row; 0 = off

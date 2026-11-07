@@ -114,6 +114,29 @@ def background_agents_running(transcript_path: str) -> bool:
     return bool(running)
 
 
+def last_prompt(transcript_path: str) -> str | None:
+    """Text of the latest main-thread user prompt in the transcript tail, stripped; None if none is found.
+
+    Tool results and meta entries are not prompts.
+    """
+    for line in reversed(_transcript_tail(transcript_path) or []):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if (not isinstance(entry, dict) or entry.get("type") != "user" or entry.get("isSidechain")
+                or entry.get("isMeta")):
+            continue
+        content = (entry.get("message") or {}).get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            texts = [b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+            if texts:
+                return "".join(texts).strip()
+    return None
+
+
 def cache_remaining(transcript_path: str, ttl: int = CACHE_TTL, _now=time.time) -> int | None:
     """Seconds until the prompt cache expires, or None if no main-thread assistant message is found.
 
@@ -407,6 +430,7 @@ def build_context(
     _cache_left_fn=cache_left,
     _tool_in_flight_fn=tool_in_flight,
     _background_agents_fn=background_agents_running,
+    _last_prompt_fn=last_prompt,
     _now=time.time,
 ) -> Context:
     return Context(
@@ -415,6 +439,7 @@ def build_context(
         cache_remaining=_cache_left_fn(fields["cache_expires_at"], fields["transcript_path"], cache_ttl),
         tool_in_flight=_tool_in_flight_fn(fields["transcript_path"]),
         background_agents=_background_agents_fn(fields["transcript_path"]),
+        last_prompt=_last_prompt_fn(fields["transcript_path"]),
         env=env,
         now=_now(),
         state_dir=_TMP,

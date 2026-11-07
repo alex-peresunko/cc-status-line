@@ -6,12 +6,16 @@ from typing import ClassVar
 
 @dataclass(frozen=True)
 class Context:
-    """Snapshot of one status line tick. Features read the session only through this."""
+    """Snapshot of one status line tick. Features read the session only through this.
+
+    `last_prompt` is the text of the latest main-thread user prompt, None if unknown.
+    """
     session_id: str
     total_in: int
     cache_remaining: int | None
     tool_in_flight: bool
     background_agents: bool
+    last_prompt: str | None
     env: Mapping[str, str]
     now: float
     state_dir: pathlib.Path
