@@ -406,7 +406,7 @@ def build_segments(
 
     # Session cost, as estimated by Claude Code from list prices
     if isinstance(cost_usd, (int, float)):
-        parts.append(f"{DIM}${cost_usd:.2f}{RESET}")
+        parts.append(f"{DIM}${cost_usd:.4f}{RESET}")
 
     # 4. Context bar
     if used_pct is not None:

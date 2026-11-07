@@ -455,8 +455,8 @@ def test_format_time_left():
 
 def test_build_segments_cost():
     segs = make_segments(cost_usd=1.234)
-    assert "W300k | $1.23 | " in joined(segs)
-    assert f"{sl.DIM}$1.23{sl.RESET}" in segs
+    assert "W300k | $1.2340 | " in joined(segs)
+    assert f"{sl.DIM}$1.2340{sl.RESET}" in segs
     assert "$" not in joined(make_segments())
 
 
