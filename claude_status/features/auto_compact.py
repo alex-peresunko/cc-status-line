@@ -20,11 +20,13 @@ def _already_fired(marker: pathlib.Path, expiry: int) -> bool:
         return False
 
 
-def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=terminal.spawn_detached) -> bool:
+def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=terminal.spawn_detached,
+                  _has_input=terminal.has_typed_input) -> bool:
     """Type /compact into the session's terminal at most once per prompt-cache expiry.
 
     Skipped while a tool call is in flight (typing Enter could approve a pending permission prompt)
-    and while background subagents are running.
+    and while background subagents are running. A tick skipped because the user is typing leaves no
+    marker, so a later tick of the same window can still fire.
     """
     remaining = ctx.cache_remaining
     if (not ctx.session_id or ctx.tool_in_flight or ctx.background_agents or remaining is None
@@ -35,7 +37,7 @@ def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=termina
         return False
     expiry = int(ctx.now + remaining)
     marker = ctx.state_dir / f"claude-compact-{ctx.session_id}"
-    if _already_fired(marker, expiry):
+    if _already_fired(marker, expiry) or _has_input(ctx.env):
         return False
     try:
         marker.write_text(str(expiry))

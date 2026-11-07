@@ -3,6 +3,9 @@ import subprocess
 from collections.abc import Mapping, Sequence
 
 _ITERM_SESSION = re.compile(r"^[^:]*:([0-9A-Fa-f-]+)$")
+_SGR = re.compile(r"\x1b\[([0-9;]*)m")
+_RULE = re.compile(r"^─{10,}")
+_PROMPT = "❯"
 
 _ITERM_SCRIPT = """\
 tell application "iTerm2"
@@ -36,6 +39,66 @@ def type_line(env: Mapping[str, str], text: str) -> list[str] | None:
     if iterm:
         return ["osascript", "-e", _ITERM_SCRIPT.format(guid=iterm[1], text=_applescript_string(text))]
     return None
+
+
+def _undimmed_text(line: str) -> str:
+    """`line` without ANSI escapes and without the runs drawn faint (SGR 2)."""
+    out, dim, pos = [], False, 0
+    for m in _SGR.finditer(line):
+        if not dim:
+            out.append(line[pos:m.start()])
+        params = m[1].split(";") if m[1] else ["0"]
+        i = 0
+        while i < len(params):
+            p = params[i]
+            if p in ("38", "48", "58"):
+                i += 3 if params[i + 1:i + 2] == ["5"] else 5
+                continue
+            if p == "2":
+                dim = True
+            elif p in ("0", "22"):
+                dim = False
+            i += 1
+        pos = m.end()
+    if not dim:
+        out.append(line[pos:])
+    return "".join(out)
+
+
+def input_box_empty(pane_capture: str) -> bool:
+    """Whether Claude Code's input box, the last block framed by two horizontal rules, holds no typed text.
+
+    Expects `tmux capture-pane -e` output. Claude Code draws the placeholder and prompt suggestions
+    faint, so faint text counts as empty. False when no box with a `❯` prompt is found (a dialog, bash
+    mode, a layout this doesn't know).
+    """
+    lines = pane_capture.splitlines()
+    rules = [i for i, line in enumerate(lines) if _RULE.match(_SGR.sub("", line).strip())]
+    boxes = [(a, b) for a, b in zip(rules, rules[1:]) if b - a > 1]
+    if not boxes:
+        return False
+    top, bottom = boxes[-1]
+    body = [_undimmed_text(line) for line in lines[top + 1:bottom]]
+    first = body[0].lstrip()
+    if not first.startswith(_PROMPT):
+        return False
+    body[0] = first[len(_PROMPT):]
+    return not "".join(body).strip()
+
+
+def has_typed_input(env: Mapping[str, str], *, _run=subprocess.run) -> bool:
+    """Whether the user may have text typed into this session's input box.
+
+    Only tmux panes can be inspected; other terminals report False. True when the pane can't be read.
+    """
+    pane = env.get("TMUX_PANE")
+    if not pane:
+        return False
+    try:
+        out = _run(["tmux", "capture-pane", "-p", "-e", "-t", pane], capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return out.returncode != 0 or not input_box_empty(out.stdout)
 
 
 def spawn_detached(argv: Sequence[str]) -> None:

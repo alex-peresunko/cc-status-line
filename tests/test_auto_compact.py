@@ -18,9 +18,9 @@ def ctx(tmp_path, **overrides):
     return Context(**{**fields, **overrides})
 
 
-def fire(tmp_path, settings=SETTINGS, **overrides):
+def fire(tmp_path, settings=SETTINGS, typed=False, **overrides):
     spawned = []
-    fired = maybe_compact(ctx(tmp_path, **overrides), settings, _spawn=spawned.append)
+    fired = maybe_compact(ctx(tmp_path, **overrides), settings, _spawn=spawned.append, _has_input=lambda env: typed)
     return fired, spawned
 
 
@@ -50,6 +50,13 @@ def test_not_while_tool_in_flight(tmp_path):
 def test_not_while_background_agents_running(tmp_path):
     assert not fire(tmp_path, background_agents=True)[0]
     assert not list(tmp_path.iterdir())
+
+
+def test_not_while_user_is_typing_and_retries_later(tmp_path):
+    fired, spawned = fire(tmp_path, typed=True)
+    assert not fired and spawned == []
+    assert not list(tmp_path.iterdir())
+    assert fire(tmp_path, cache_remaining=55, now=1_000_005.0)[0]
 
 
 def test_needs_session_id_and_known_terminal(tmp_path):
