@@ -628,6 +628,11 @@ def test_parse_input_cost():
     assert sl.parse_input({})["cost_usd"] is None
 
 
+def test_parse_input_hides_cost_on_subscription():
+    data = {"cost": {"total_cost_usd": 1.234}, "rate_limits": {"five_hour": {"used_percentage": 5}}}
+    assert sl.parse_input(data)["cost_usd"] is None
+
+
 def test_parse_input_empty_dict():
     result = sl.parse_input({})
     assert result["model"] == "Claude"

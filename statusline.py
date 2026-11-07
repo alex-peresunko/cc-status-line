@@ -338,7 +338,8 @@ def parse_input(data: dict) -> dict:
     effort_raw = data.get("effort") or {}
     effort     = (effort_raw.get("level") if isinstance(effort_raw, dict) else effort_raw) or ""
 
-    cost_usd   = (data.get("cost") or {}).get("total_cost_usd")
+    # rate_limits is sent only to claude.ai subscribers, who aren't billed per token
+    cost_usd   = None if rl else (data.get("cost") or {}).get("total_cost_usd")
 
     return dict(
         model=model, cwd=cwd, project=project,
