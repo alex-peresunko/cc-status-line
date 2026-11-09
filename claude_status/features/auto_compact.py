@@ -13,6 +13,7 @@ class AutoCompactSettings(Settings):
     tokens: int = 150_000
     within: int = 30
     keep_warm_minutes: int = 60
+    keep_warm_min_tokens: int = 10_000
 
 
 def _already_fired(marker: pathlib.Path, expiry: int) -> bool:
@@ -32,7 +33,7 @@ def _read_streak_start(path: pathlib.Path) -> int | None:
 def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=terminal.spawn_detached,
                   _has_input=terminal.has_typed_input) -> bool:
     """Before the prompt cache expires, type /compact into the session's terminal, or `PING` while the
-    context is below `tokens`. At most one of them per cache expiry.
+    context is below `tokens` but at least `keep_warm_min_tokens`. At most one of them per cache expiry.
 
     Pings in a row keep the cache warm for about `keep_warm_minutes` past the expiry the first of them
     extended (0 = no pings); the streak continues only while the last prompt in the transcript is `PING`,
@@ -52,6 +53,8 @@ def maybe_compact(ctx: Context, settings: AutoCompactSettings, *, _spawn=termina
     streak_start = None
     if ctx.total_in >= settings.tokens:
         text = "/compact"
+    elif ctx.total_in < settings.keep_warm_min_tokens:
+        return False
     else:
         streak_start = _read_streak_start(streak_file) if ctx.last_prompt == PING else None
         streak_start = expiry if streak_start is None else streak_start

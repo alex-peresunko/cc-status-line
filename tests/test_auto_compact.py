@@ -147,6 +147,14 @@ def test_ping_once_per_cache_expiry_and_not_while_typing(tmp_path):
     assert not fire(tmp_path, cache_remaining=55, now=1_000_005.0, **BELOW)[0]
 
 
+def test_no_ping_below_keep_warm_min_tokens(tmp_path):
+    settings = AutoCompactSettings(enabled=True, tokens=100_000, within=90, keep_warm_min_tokens=10_000)
+    fired, spawned = fire(tmp_path, settings, total_in=9_999)
+    assert not fired and spawned == []
+    assert not list(tmp_path.iterdir())
+    assert typed(fire(tmp_path, settings, total_in=10_000)[1]) == [PING]
+
+
 def test_compact_does_not_count_towards_the_streak(tmp_path):
     assert fire(tmp_path)[0]
     assert not (tmp_path / "claude-keepwarm-sess-1").exists()

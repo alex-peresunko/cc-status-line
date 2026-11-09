@@ -19,3 +19,4 @@ enabled = false
 tokens  = 150000     # compact at or above this many context tokens
 within  = 30         # ... when this many seconds or fewer of cache remain
 keep_warm_minutes = 60  # below tokens, ping instead to keep the cache warm this long past its expiry; 0 = off
+keep_warm_min_tokens = 10000  # ... but never ping a context smaller than this (e.g. just after /clear)

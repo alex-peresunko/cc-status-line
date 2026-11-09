@@ -87,6 +87,7 @@ enabled = false
 tokens  = 150000     # compact at or above this many context tokens
 within  = 30         # ... when this many seconds or fewer of cache remain
 keep_warm_minutes = 60  # below tokens, ping instead to keep the cache warm this long past its expiry; 0 = off
+keep_warm_min_tokens = 10000  # ... but never ping a context smaller than this (e.g. just after /clear)
 ```
 
 Environment variables override the file: `CLAUDE_STATUS_CTX_WARN`, `CLAUDE_STATUS_CTX_CRIT`, `CLAUDE_STATUS_BAR_WIDTH`, `CLAUDE_STATUS_CACHE_TTL`. Set `CLAUDE_STATUS_CONFIG` to read the config from another path.
@@ -101,7 +102,7 @@ Features are opt-in actions that run on each refresh, after the line is printed.
 
 Compacting while the prompt cache is still warm is far cheaper than after it expires. When the context is at least `tokens` large and the cache has `within` seconds or fewer left, this feature types `/compact` into the session's terminal, at most once per cache window.
 
-Below `tokens` it types a short keep-alive ping instead, which tells Claude to ignore it and reply "ok". Its turn refreshes the cache. Pings stop once the cache has been kept warm for `keep_warm_minutes` past the moment it would have expired; any prompt of your own starts a new streak. Each ping reads the whole context from cache (0.05× the input price on Opus 5.5) to avoid a full re-write later (1.25×, or 2× for the 1-hour cache), so it pays off only if you are likely to come back within that time.
+Below `tokens` it types a short keep-alive ping instead, which tells Claude to ignore it and reply "ok". Its turn refreshes the cache. Pings stop once the cache has been kept warm for `keep_warm_minutes` past the moment it would have expired; any prompt of your own starts a new streak. A context below `keep_warm_min_tokens` (default 10000, e.g. right after `/clear`) is never pinged and is left to expire. Each ping reads the whole context from cache (0.05× the input price on Opus 5.5) to avoid a full re-write later (1.25×, or 2× for the 1-hour cache), so it pays off only if you are likely to come back within that time.
 
 - Works in **tmux** and **iTerm2** (detected automatically); does nothing elsewhere.
 - Waits while a tool call is in flight or background subagents are running, so it never answers a permission prompt by accident.
